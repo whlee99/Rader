@@ -1,5 +1,6 @@
 # main.py
 import sys
+import signal
 import random
 import math
 from enum import Enum, auto
@@ -473,6 +474,17 @@ class SraderDashboard(QMainWindow):
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setStyleSheet(STYLESHEET)
+
+    # CTRL+C (SIGINT) 를 받으면 Qt 앱을 안전하게 종료
+    signal.signal(signal.SIGINT, lambda *_: app.quit())
+
+    # Qt 이벤트 루프는 Python 시그널을 놓칠 수 있으므로
+    # 100ms 마다 Python 인터프리터에 제어권을 넘겨 SIGINT 를 감지하게 함
+    sigint_timer = QTimer()
+    sigint_timer.setInterval(100)
+    sigint_timer.timeout.connect(lambda: None)  # no-op, just wake Python
+    sigint_timer.start()
+
     window = SraderDashboard()
     window.show()
     sys.exit(app.exec())
