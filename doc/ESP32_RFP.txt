@@ -1,0 +1,117 @@
+1. minishell 이 부팅후 가장 먼저 실행 된다. 
+   prompt: RADER> 
+
+   기능 : 
+   
+   3초 동안 Key 입력이 없으면 아무 입력이 없으면 main을 실행한다. 
+
+    명령어 : 
+
+    1) printenv 
+       env 내용을 보여준다. 
+    2) set mac
+       mac address 를 입력 받는다. 
+    3) set ip  
+       static ip를 입력 받는다. 
+    3) set gw 
+       static gw를 입력 받는다. 
+    4) set mask 
+       static subnet mask를 입력 받는다. 
+    5) set ipmode
+       0: Static, 1: DHCP 
+    6) set ssid 
+    7) set pwd 
+    8) set brockerip
+    9) test network 
+       239.255.3.4 multicast 로 env 내용을 udp 8096 포트로 송출한다. 
+       192.168.0.20:8096 unicast 로도 동시 송출.
+   10) test led
+       M_LED_1 (IO14) / M_LED_2 (IO13) 동시 ON/OFF 3회 점멸.
+   11) test i2c
+       VL53L5CX I2C 주소(0x29, 0x52) 감지. SDA/SCL 교체 조합 및
+       100kHz / 50kHz / 10kHz 3단계 속도로 순차 탐색.
+
+
+2. IO Map 
+
+2.1 TFmini Plus
+   - 보드: TFmini Plus (Benewake)
+   - 인터페이스: UART2 (115200 baud, 8N1)
+   - 프레임: 9바이트, 100Hz
+     [0x59][0x59][DistL][DistH][StrL][StrH][TempL][TempH][Checksum]
+   - GPIO 배선:
+     ESP32 GPIO16 (UART2 RX) ←→ TFmini Plus TX
+     ESP32 GPIO17 (UART2 TX) ←→ TFmini Plus RX
+   - 전원: 5V / GND
+   - 감지 방식: 부팅 시 UART2 에서 500ms 동안 유효 프레임 수신 시도.
+     수신 성공 시 TFmini 모드, 실패 시 VL53L5CX 모드로 자동 전환.
+
+2.2 VL53L5CX
+      message : 
+      {"m":"cx","d":[11,16,17,15,479,474,725,788,12,16,17,16,398,446,460,845,14,13,17,15,14,414,458,909,13,15,12,17,13,15,289,467,9,12,15,20,20,14,116,15,14,14,15,16,16,17,335,378,12,14,16,16,17,21,19,740,14,17,16,16,17,18,18,692]}
+      
+
+   - 보드: Pololu VL53L5CX Time-of-Flight Sensor Carrier (irs18a PCB)
+     제품번호: Pololu #3417
+     (동일 PCB 로 VL53L7CX #3418 도 존재. 광학 개구부 형상으로 구분)
+   - 인터페이스: I2C
+   - I2C 주소: 0x29 (7-bit), 파워업 기본값
+   - I2C 클럭: 50kHz (케이블 길이 ~30cm 고려, 레벨시프터 안정성)
+
+   GPIO 배선:
+     ESP32 GPIO5  ←→ 보드 SDA  (I2C Data)
+     ESP32 GPIO4  ←→ 보드 SCL  (I2C Clock)
+     ESP32 GPIO34 ←→ 보드 INT  (인터럽트, 현재 미사용 / 폴링 방식)
+     보드 RST          N.C.    (보드 내부 GND 풀다운, 연결 불필요)
+                               ※ RST 는 active-HIGH: HIGH 인가 시 I2C 리셋
+                                  GND 고정(기본) = 정상 동작
+     보드 LPN          3.3V 고정 (active-LOW disable, HIGH=정상동작)
+                               ※ 보드 내부 VDD 풀업 있음. CPU 연결 불필요.
+
+   전원 배선:
+     ESP32 5V  (VIN) ←→ 보드 VIN  (레귤레이터 + 레벨시프터 전원)
+     ESP32 3.3V      ←→ 보드 VDD  (I2C 레벨시프터 LOW측 기준전압)
+                               ※ VDD 미연결 시 I2C 레벨시프터 동작 불가
+                                  → NACK (err=2) 발생
+     ESP32 GND       ←→ 보드 GND
+
+   I2C 풀업:
+     SDA, SCL 각각 2.2kΩ → 3.3V (외부 풀업, 30cm 배선 대응)
+
+2.3 LED
+   IO14 : M_LED_1 (외부 LED 1)
+   IO13 : M_LED_2 (외부 LED 2)
+   - 부팅 3초 대기 중: M_LED_1 / M_LED_2 250ms 교대 점멸
+   - Shell 종료 / 타임아웃 후: 두 LED 모두 ON
+
+2.4 Status LED
+   IO2  : 내장 LED (정상=점등, 오류=점멸)
+
+2.5 센서 자동 선택
+   - 부팅 시 UART2(GPIO16) 에서 TFmini 프레임 감지 (500ms)
+   - 감지 성공: TFmini Plus 모드
+   - 감지 실패: VL53L5CX 모드 (I2C)
+
+
+3. main program
+
+   ESP32 는 MQTT Publisher 이며, TOPIC 는 "RDR" 이다.
+
+   3.1 센서 데이터 UDP 송출 (200ms 주기, 192.168.0.20:8096)
+
+   TFmini Plus 포맷:
+     {"dist":<cm>,"str":<strength>,"temp":<°C>}
+
+   VL53L5CX 포맷:
+     {"m":"cx","d":[d0,d1,...,d63]}
+     (8x8=64 zones, 단위 mm, 좌상단→우하단 순서)
+
+   3.2 미결정 사항
+   1. GPIO 핀 상태에 따라, TFmini Plus 또는 VL53L5CX 의 센서 값을 Publish 한다.
+ 
+   2. GPIO 핀 으로 정상 상태 또는 ERROR 상태를 표시한다. 
+
+
+
+
+
