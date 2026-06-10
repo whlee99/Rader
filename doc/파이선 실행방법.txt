@@ -1,0 +1,73 @@
+Python 가상환경 실행 방법
+==========================
+
+■ 프로젝트 루트
+    D:\git.whlee2\Rader\
+
+■ 가상환경 위치
+    D:\git.whlee2\Rader\.venv\
+
+■ 설치된 주요 패키지
+    PySide6      6.11.1   - GUI 프레임워크
+    paho-mqtt    2.1.0    - MQTT 클라이언트
+    paramiko     5.0.0    - SSH / SCP
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. 가상환경 활성화 (선택 사항)
+---------------------------------------
+    cd D:\git.whlee2\Rader
+    .venv\Scripts\activate
+
+    활성화 시 프롬프트 앞에 (.venv) 가 표시됨.
+    활성화 후에는 python, pip 명령어를 그대로 사용 가능.
+
+    비활성화:
+    deactivate
+
+
+2. 가상환경 활성화 없이 직접 실행 (권장)
+---------------------------------------
+    프로젝트 루트에서 .venv 내부 python 인터프리터를 직접 지정.
+
+    ▶ 에뮬레이터 실행
+    .venv\Scripts\python tool\edge_emulator.py
+
+    ▶ monitor 앱 실행
+    .venv\Scripts\python src\monitor\main.py
+
+    ▶ setup 앱 실행
+    .venv\Scripts\python src\setup\main.py
+
+    ▶ 임의 스크립트 실행
+    .venv\Scripts\python <스크립트 경로>
+
+
+3. 패키지 추가 설치
+---------------------------------------
+    .venv\Scripts\pip install <패키지명>
+
+    설치 후 requirements.txt 갱신:
+    .venv\Scripts\pip freeze > requirements.txt
+
+
+4. 다른 PC 에서 환경 복원
+---------------------------------------
+    cd D:\git.whlee2\Rader
+    python -m venv .venv
+    .venv\Scripts\pip install -r requirements.txt
+
+
+5. VS Code 에서 인터프리터 선택
+---------------------------------------
+    Ctrl+Shift+P  →  Python: Select Interpreter
+    →  D:\git.whlee2\Rader\.venv\Scripts\python.exe  선택
+
+    이후 터미널(Ctrl+`)을 열면 자동으로 가상환경이 활성화됨.
+
+
+6. PlatformIO 와의 관계
+---------------------------------------
+    PlatformIO 는 ~/.platformio/ 내부의 독립 Python 을 사용.
+    본 .venv 와 완전히 분리되어 있으므로 충돌 없음.
+    PIO 빌드/업로드와 Python 앱 실행은 동시에 가능.

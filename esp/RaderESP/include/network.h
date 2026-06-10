@@ -24,3 +24,6 @@ void net_test_multicast(const Env &e);
 
 // UDP unicast 단건 송출
 void net_udp_send(const char *host, uint16_t port, const char *payload);
+
+// LAN8720 테스트: MDIO PHY ID 확인 + ETH 링크 + GW ping
+bool net_eth_test(const Env &e);

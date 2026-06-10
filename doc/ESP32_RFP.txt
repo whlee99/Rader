@@ -106,11 +106,111 @@
      {"m":"cx","d":[d0,d1,...,d63]}
      (8x8=64 zones, 단위 mm, 좌상단→우하단 순서)
 
-   3.2 미결정 사항
+   3.2 Debug UDP 송출 (UDP 8096)
+
+   디버그 목적으로 센서 데이터와 시스템 상태를 UDP 8096 포트로 추가 송출한다.
+
+   3.2.1 송출 대상
+     - Unicast  : 192.168.0.20:8096
+     - Multicast: 239.255.3.4:8096 (동시 송출)
+
+   3.2.2 송출 주기
+     - 센서 데이터 : 200ms 주기 (3.1 과 동일 패킷 재사용)
+     - 시스템 상태 : 1000ms 주기
+
+   3.2.3 Debug 메시지 포맷
+
+   센서 데이터 (기존 포맷 그대로):
+     TFmini Plus : {"dist":<cm>,"str":<strength>,"temp":<°C>}
+     VL53L5CX   : {"m":"cx","d":[d0,d1,...,d63]}
+
+   시스템 상태:
+     {"type":"dbg","uptime":<ms>,"sensor":"<tfmini|vl53>",
+      "wifi":<rssi>,"ip":"<ip>","free_heap":<bytes>,"err":<code>}
+
+     필드 설명:
+       uptime    : 부팅 후 경과 ms (millis())
+       sensor    : 현재 활성 센서 ("tfmini" 또는 "vl53")
+       wifi      : WiFi RSSI (dBm), 미연결 시 0
+       ip        : 현재 IP 문자열
+       free_heap : ESP.getFreeHeap() 반환값 (bytes)
+       err       : 0=정상, 1=센서오류, 2=WiFi끊김, 3=MQTT오류
+
+   3.3 미결정 사항
    1. GPIO 핀 상태에 따라, TFmini Plus 또는 VL53L5CX 의 센서 값을 Publish 한다.
  
    2. GPIO 핀 으로 정상 상태 또는 ERROR 상태를 표시한다. 
 
+
+4. LAN8720 연결
+
+4.1 핀 매핑 (RMII 인터페이스)
+
+   ESP32 DevKitC-V4    기능          LAN8720
+   ──────────────────────────────────────────────────────
+   IO19               TXD0          TXD0
+   IO22               TXD1          TXD1
+   IO21               TX_EN         TX_EN
+   IO25               RXD0          RXD0/MODE0      ← 10K Pull-up
+   IO26               RXD1          RXD1/MODE1      ← 10K Pull-up
+   IO27               CRS_DV        CRS_DV/MODE2    ← 10K Pull-up
+   IO18               MDIO          MDIO            ← 10K Pull-up
+   IO23               MDC           MDC
+   IO17               CLK (50MHz 출력)  XTAL1/CLKIN
+   IO32               nRST            nRST (active-LOW)
+
+   CLK 공급 방식 : ESP32 GPIO17 출력 (ETH_CLOCK_GPIO17_OUT)
+                  → GPIO17 을 LAN8720 에 공급하므로 UART2 TX 미사용
+                  → config.h: TFMINI_TX_PIN = -1
+
+4.2 하드웨어 Pull-up / 부트스트랩
+
+   RXD0 / RXD1 / CRS_DV 는 리셋 해제 시 MODE[2:0] 로 샘플링됨.
+   세 핀 모두 10K Pull-up → MODE[2:0] = 111
+   → LAN8720 All-Capable (10/100, Half/Full) + Auto-negotiation ON
+
+   MDIO 10K Pull-up → 버스 idle 시 HIGH 유지 (IEEE 802.3 규격)
+
+4.3 PHY 주소 (PHYAD0 / RXER 핀)
+
+   PHYAD0 = GND  → PHY 주소 0
+   PHYAD0 = VCC  → PHY 주소 1  ← 실측 확인 (Reg18=0xC1C1, PHYAD=1)
+   config.h ETH_PHY_ADDR = 1  (하드웨어 실측값 기준)
+
+4.4 nRST 처리 (GPIO32)
+
+   GPIO32 → LAN8720 nRST (active-LOW)
+   ETH.begin() 두 번째 인수(power 핀)에 GPIO32 를 전달하면
+   Arduino-ESP32 ETH 라이브러리가 아래 순서를 자동으로 처리:
+
+     1) GPIO32 LOW  → LAN8720 리셋 유지
+     2) GPIO17 RMII 클럭(50MHz) 출력 시작
+     3) GPIO32 HIGH → 클럭 안정 후 리셋 해제 + MODE 핀 샘플링
+     4) MDIO 를 통한 PHY 초기화
+
+   ※ nRST 를 RC 회로로만 처리하면 CLK 공급 전에 리셋이 해제될 수 있음
+      → PHY 내부 state machine 초기화 불완전 → 링크 불안정 위험
+      GPIO 제어 방식이 필수.
+
+4.5 GPIO17 충돌 해소
+
+   기존 TFMINI_TX_PIN = 17 (UART2 TX) 이었으나,
+   TFMini Plus 는 ESP32 수신 전용(단방향)이므로 TX 핀이 실제 불필요.
+   Serial2.begin(..., RX_PIN, -1) 으로 TX 미할당 → GPIO17 해방.
+   변경 후: TFMINI_TX_PIN = -1
+
+4.6 test lan8720 (Minishell 명령)
+
+   실행 절차:
+   1) MDIO bit-bang: PHY 식별자 레지스터 직접 읽기 (ETH.begin() 이전)
+      - MDC=GPIO23, MDIO=GPIO18
+      - PHY 주소 0, 1 모두 시도
+      - Reg2 (ID1) = 0x0007, Reg3 (ID2) & 0xFFF0 = 0xC0F0 → LAN8720 확인
+   2) ETH.begin (ETH_PHY_LAN8720, ETH_CLOCK_GPIO17_OUT, DHCP)
+      - 링크 업 대기 (최대 8초)
+      - 링크 속도(10/100 Mbps), 듀플렉스, MAC, IP 표시
+   3) GW (env.gw, 기본 192.168.0.1) 로 ICMP Ping x3
+      - 성공 수 / 평균 RTT 표시 
 
 
 

@@ -120,6 +120,7 @@ static void printHelp() {
     Serial.println("  set brockerip     MQTT 브로커 IP 설정");
     Serial.println("  test network      UDP Multicast 로 env 송출");
   Serial.println("  test i2c          VL53L5CX I2C 주소(0x29/0x52) 감지, SDA/SCL 교체 포함");
+  Serial.println("  test lan8720      LAN8720 PHY ID(MDIO) + 링크 확인 + GW ping");
   Serial.println("  test led          M_LED_1/2 동시 ON/OFF 토글 (3회)");
     Serial.println("  run               Shell 종료 → main 실행");
     Serial.println("  reboot            ESP32 재시작");
@@ -304,6 +305,9 @@ void shell_run(Env &e) {
 
         } else if (cmd == "test network") {
             net_test_multicast(e);
+
+        } else if (cmd == "test lan8720") {
+            net_eth_test(e);
 
         } else if (cmd == "run") {
             Serial.println("[SHELL] Exiting → starting main.\n");
