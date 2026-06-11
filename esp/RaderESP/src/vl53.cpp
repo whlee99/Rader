@@ -95,9 +95,11 @@ void vl53_update() {
 
     if (!s_sensor.getRangingData(&s_results)) return;
 
-    // 캐시 덮어쓰기 — 최신 64개 거리값 유지
+    // 캐시 덮어쓰기 — 최신 64개 거리값 + 유효성 + 타겟수 유지
     for (int i = 0; i < VL53_RESOLUTION; i++) {
-        s_latest.dist_mm[i] = (uint16_t)s_results.distance_mm[i];
+        s_latest.dist_mm[i]       = (uint16_t)s_results.distance_mm[i];
+        s_latest.target_status[i] = s_results.target_status[i];
+        s_latest.nb_target[i]     = s_results.nb_target_detected[i];
     }
     s_hasFrame = true;
 }

@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+*.egg-info/
+
+# Build / dist
+build/
+dist/
+
+# IDE
+.vscode/
+*.code-workspace
+
+# Office temp
+~$*
+
+# OS
+Thumbs.db
+.DS_Store

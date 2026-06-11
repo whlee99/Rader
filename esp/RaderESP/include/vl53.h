@@ -18,7 +18,9 @@
 #define VL53_RESOLUTION 64  // 8x8
 
 struct VL53Frame {
-    uint16_t dist_mm[VL53_RESOLUTION];  // 거리 (mm)
+    uint16_t dist_mm[VL53_RESOLUTION];       // 거리 (mm)
+    uint8_t  target_status[VL53_RESOLUTION]; // Zone 유효성 코드 (5 = valid)
+    uint8_t  nb_target[VL53_RESOLUTION];     // Zone 별 감지 타겟 수
 };
 
 // I2C 초기화 + 센서 설정 + 측정 시작

@@ -101,30 +101,58 @@ void loop() {
         if (g_useTFMini) {
             TFFrame frame;
             if (tfmini_read(frame)) {
-                char payload[64];
+                // RFP 3-2: {"mac":"AA:BB:CC:DD:EE:FF","ts":<ms>,"s1":[<dist_cm>]}
+                uint8_t mac[6];
+                esp_wifi_get_mac(WIFI_IF_STA, mac);
+                char macStr[18];
+                snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+                         mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+
+                char payload[128];
                 snprintf(payload, sizeof(payload),
-                         "{\"dist\":%u,\"str\":%u,\"temp\":%.1f}",
-                         frame.dist, frame.strength, frame.temp);
-                Serial.printf("[TFMini] dist=%ucm  strength=%u  temp=%.1fC  -> UDP %s:%d\n",
-                              frame.dist, frame.strength, frame.temp,
-                              UDP_UCAST_ADDR, TFMINI_UDP_PORT);
-                net_udp_send(UDP_UCAST_ADDR, TFMINI_UDP_PORT, payload);
+                         "{\"mac\":\"%s\",\"ts\":%lu,\"s1\":[%u]}",
+                         macStr, now, frame.dist);
+                Serial.printf("[TFMini] dist=%ucm -> MQTT topic=%s\n",
+                              frame.dist, MQTT_TOPIC);
+                net_mqtt_publish(payload);
             }
         } else {
             VL53Frame frame;
             if (vl53_read(frame)) {
-                // {"m":"cx","d":[d0,d1,...,d63]}  — 최대 ~410 bytes
-                char payload[512];
+                // RFP 3-2: {"mac":"..","ts":<ms>,"s2":[{"d":[...],"st":[...],"nb":[...]}]}
+                uint8_t mac[6];
+                esp_wifi_get_mac(WIFI_IF_STA, mac);
+                char macStr[18];
+                snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+                         mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+
+                // d[], st[], nb[] 배열 직렬화 (최대 ~480 bytes)
+                char payload[640];
                 int pos = 0;
-                pos += snprintf(payload + pos, sizeof(payload) - pos, "{\"m\":\"cx\",\"d\":[");
+                pos += snprintf(payload + pos, sizeof(payload) - pos,
+                                "{\"mac\":\"%s\",\"ts\":%lu,\"s2\":[{\"d\":[",
+                                macStr, now);
                 for (int i = 0; i < VL53_RESOLUTION; i++) {
                     pos += snprintf(payload + pos, sizeof(payload) - pos,
                                     "%u%s", frame.dist_mm[i],
                                     i < VL53_RESOLUTION - 1 ? "," : "");
                 }
-                pos += snprintf(payload + pos, sizeof(payload) - pos, "]}");
-                Serial.printf("[VL53] 8x8 frame -> UDP %s:%d\n", UDP_UCAST_ADDR, VL53_UDP_PORT);
-                net_udp_send(UDP_UCAST_ADDR, VL53_UDP_PORT, payload);
+                pos += snprintf(payload + pos, sizeof(payload) - pos, "],\"st\":[");
+                for (int i = 0; i < VL53_RESOLUTION; i++) {
+                    pos += snprintf(payload + pos, sizeof(payload) - pos,
+                                    "%u%s", frame.target_status[i],
+                                    i < VL53_RESOLUTION - 1 ? "," : "");
+                }
+                pos += snprintf(payload + pos, sizeof(payload) - pos, "],\"nb\":[");
+                for (int i = 0; i < VL53_RESOLUTION; i++) {
+                    pos += snprintf(payload + pos, sizeof(payload) - pos,
+                                    "%u%s", frame.nb_target[i],
+                                    i < VL53_RESOLUTION - 1 ? "," : "");
+                }
+                pos += snprintf(payload + pos, sizeof(payload) - pos, "]}]}");
+                Serial.printf("[VL53] 8x8 frame -> MQTT topic=%s (%d bytes)\n",
+                              MQTT_TOPIC, pos);
+                net_mqtt_publish(payload);
             }
         }
     }

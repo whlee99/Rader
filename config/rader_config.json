@@ -1,0 +1,58 @@
+{
+  "devices": [
+    {
+      "mac": "A4:CF:12:00:00:02",
+      "type": "S1",
+      "s1": "R"
+    },
+    {
+      "mac": "A4:CF:12:00:00:01",
+      "type": "S1",
+      "s1": "L"
+    },
+    {
+      "mac": "A4:CF:12:00:00:03",
+      "type": "S2",
+      "s2": [
+        "pos1"
+      ],
+      "active_s2": 1
+    },
+    {
+      "mac": "A4:CF:12:00:00:07",
+      "type": "S2",
+      "s2": [
+        "pos5"
+      ],
+      "active_s2": 1
+    },
+    {
+      "mac": "A4:CF:12:00:00:05",
+      "type": "S2",
+      "s2": [
+        "pos3"
+      ],
+      "active_s2": 1
+    },
+    {
+      "mac": "A4:CF:12:00:00:04",
+      "type": "S2",
+      "s2": [
+        "pos2"
+      ],
+      "active_s2": 1
+    },
+    {
+      "mac": "A4:CF:12:00:00:06",
+      "type": "S2",
+      "s2": [
+        "pos4"
+      ],
+      "active_s2": 1
+    }
+  ],
+  "sensor_gap_cm": 1200.0,
+  "baseline_offset": -4.716,
+  "tilt_limit_deg": 15.0,
+  "threshold_mm": 300
+}

@@ -94,22 +94,30 @@ class TiltIndicatorWidget(QWidget):
 
 # ── 2. 장애물 감지 위젯 (수직 막대 / 선 그래프) ───────────────────────────────
 class ObstacleColumnWidget(QWidget):
-    """S2 센서 1개의 8열 거리 데이터를 수직 막대 또는 선으로 표시"""
+    """S2 센서 1개의 8열 거리 데이터를 수직 막대 또는 선으로 표시
+
+    레이아웃 (위 → 아래):
+      [  센서 이름  ]   ← 16px
+      [  막대/선    ]   ← 중간 영역 (bar_area)
+      [최솟값 mm    ]   ← 16px
+    """
+
+    _LABEL_H = 16   # 위 제목 높이
+    _VALUE_H = 16   # 아래 수치 높이
 
     def __init__(self, sensor_name: str, parent=None):
         super().__init__(parent)
         self.sensor_name  = sensor_name
         self.distances    = [4000] * 8
         self.display_mode = DisplayMode.BAR
-        self.setMinimumSize(60, 200)
+        self.setMinimumSize(70, 220)
 
     @Slot(list)
     def update_data(self, new_distances: list):
-        if len(new_distances) == 8:
-            self.distances = new_distances
-            self.update()
+        self.distances = list(new_distances) + [4000] * max(0, 8 - len(new_distances))
+        self.distances = self.distances[:8]
+        self.update()
 
-    @Slot(DisplayMode)
     def setDisplayMode(self, mode: DisplayMode):
         if self.display_mode != mode:
             self.display_mode = mode
@@ -126,34 +134,71 @@ class ObstacleColumnWidget(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
+        w = self.width()
+        h = self.height()
 
-        painter.setPen(Qt.white)
-        painter.drawText(self.rect(), Qt.AlignHCenter | Qt.AlignTop, self.sensor_name)
+        # ── 배경 ──────────────────────────────────────────────────────
+        painter.fillRect(self.rect(), Constants.COLOR_BACKGROUND)
 
-        bar_h   = self.height() - 20
-        bar_w   = self.width() / 8.0
-        max_d   = 4000.0
+        # ── 센서 이름 (상단) ──────────────────────────────────────────
+        painter.setPen(QPen(Qt.white))
+        f = painter.font(); f.setPointSize(8); painter.setFont(f)
+        painter.drawText(0, 0, w, self._LABEL_H,
+                         Qt.AlignHCenter | Qt.AlignVCenter, self.sensor_name)
+
+        # ── 막대 영역 ─────────────────────────────────────────────────
+        bar_top  = self._LABEL_H
+        bar_bot  = h - self._VALUE_H
+        bar_h    = bar_bot - bar_top    # 실제 그래프 세로 길이
+        bar_w    = w / 8.0
+        max_d    = 4000.0
 
         if self.display_mode == DisplayMode.BAR:
             for i, d in enumerate(self.distances):
-                painter.setBrush(self._color(d))
+                color = self._color(d)
+                painter.setBrush(QBrush(color))
                 painter.setPen(Qt.NoPen)
                 ratio = 1.0 - min(d, max_d) / max_d
-                h     = bar_h * ratio
-                painter.drawRect(QRectF(i * bar_w,
-                                        self.height() - h,
-                                        bar_w - 2, h))
-        else:
+                fill_h = bar_h * ratio
+                painter.drawRect(QRectF(
+                    i * bar_w,
+                    bar_bot - fill_h,
+                    bar_w - 1,
+                    fill_h,
+                ))
+        else:  # LINE
             pts = []
             for i, d in enumerate(self.distances):
                 ratio = 1.0 - min(d, max_d) / max_d
-                pts.append(QPointF((i + 0.5) * bar_w, self.height() - bar_h * ratio))
-            path = QPainterPath()
-            path.moveTo(pts[0])
-            for p in pts[1:]:
-                path.lineTo(p)
-            painter.setPen(QPen(Constants.COLOR_CAUTION, 2))
-            painter.drawPath(path)
+                pts.append(QPointF((i + 0.5) * bar_w, bar_bot - bar_h * ratio))
+            if pts:
+                # 선 색상: 최솟값 기준
+                min_d = min(self.distances)
+                painter.setPen(QPen(self._color(min_d), 2))
+                path = QPainterPath()
+                path.moveTo(pts[0])
+                for p in pts[1:]:
+                    path.lineTo(p)
+                painter.drawPath(path)
+                # 포인트 점
+                painter.setBrush(QBrush(self._color(min_d)))
+                for p in pts:
+                    painter.drawEllipse(p, 3, 3)
+
+        # ── 격자선 (bar_area 내) ───────────────────────────────────────
+        painter.setPen(QPen(Constants.COLOR_GRID_LINE, 1))
+        for frac in (0.25, 0.5, 0.75):
+            y = int(bar_bot - bar_h * frac)
+            painter.drawLine(0, y, w, y)
+
+        # ── 최솟값 표시 (하단) ────────────────────────────────────────
+        min_d = min(self.distances)
+        color_txt = self._color(min_d)
+        painter.setPen(QPen(color_txt))
+        f2 = painter.font(); f2.setPointSize(8); f2.setBold(True); painter.setFont(f2)
+        painter.drawText(0, bar_bot, w, self._VALUE_H,
+                         Qt.AlignHCenter | Qt.AlignVCenter,
+                         f"{min_d} mm")
 
 
 # ── 3. 컬러바 범례 ────────────────────────────────────────────────────────────

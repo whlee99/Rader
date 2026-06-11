@@ -34,6 +34,11 @@ def main():
     win   = SraderDashboard(vm)
     win.show()
 
+    # ── config 로드 (시작 시 1회) ──────────────────────────────────────────
+    ok, msg = vm.load_config()
+    # 로그 창에 결과 출력 (성공/실패 모두)
+    vm.log_signal.emit(msg)
+
     # Broker 는 항상 localhost:1883 (Mosquitto)
     vm.connect_broker("localhost", 1883)
 

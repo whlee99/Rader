@@ -14,7 +14,7 @@
 #define MQTT_PORT           1883
 #define MQTT_CLIENT_ID      "srader_esp32"
 #define MQTT_TOPIC          "RDR"
-#define MQTT_BUFFER_SIZE    512
+#define MQTT_BUFFER_SIZE    768  // VL53L5CX d[]+st[]+nb[]+mac+ts 최대 ~640 bytes
 
 // ── UDP (test network) ──────────────────────────────────
 #define UDP_MCAST_ADDR   "239.255.3.4"
