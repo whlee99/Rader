@@ -37,6 +37,7 @@ class Constants:
 class DisplayMode(Enum):
     BAR  = auto()
     LINE = auto()
+    CELL = auto()
 
 
 # ── 1. 기울기 표시 위젯 ───────────────────────────────────────────────────────
@@ -108,19 +109,31 @@ class ObstacleColumnWidget(QWidget):
     def __init__(self, sensor_name: str, parent=None):
         super().__init__(parent)
         self.sensor_name  = sensor_name
-        self.distances    = [4000] * 8
+        self.distances    = [4000] * 8    # 8열 최솟값 (BAR/LINE)
+        self.raw64        = [4000] * 64   # 전체 64존 (CELL)
         self.display_mode = DisplayMode.BAR
         self.setMinimumSize(70, 220)
 
     @Slot(list)
-    def update_data(self, new_distances: list):
-        self.distances = list(new_distances) + [4000] * max(0, 8 - len(new_distances))
-        self.distances = self.distances[:8]
+    def update_data(self, new_d64: list):
+        """64개 원본값을 받아 BAR/LINE용 8열 최솟값도 함께 갱신"""
+        d = list(new_d64) + [4000] * max(0, 64 - len(new_d64))
+        self.raw64 = d[:64]
+        # 8열 최솟값: col별 8개 row 중 min
+        self.distances = [
+            min(self.raw64[row * 8 + col] for row in range(8))
+            for col in range(8)
+        ]
         self.update()
 
     def setDisplayMode(self, mode: DisplayMode):
         if self.display_mode != mode:
             self.display_mode = mode
+            # CELL 모드는 8×8 그리드를 위해 최소 크기 확장
+            if mode == DisplayMode.CELL:
+                self.setMinimumSize(90, 130)
+            else:
+                self.setMinimumSize(70, 220)
             self.update()
 
     @staticmethod
@@ -185,6 +198,31 @@ class ObstacleColumnWidget(QWidget):
                 for p in pts:
                     painter.drawEllipse(p, 3, 3)
 
+        if self.display_mode == DisplayMode.CELL:
+            # 8×8 히트맵 그리드
+            cell_w = w / 8.0
+            cell_h = bar_h / 8.0
+            painter.setPen(Qt.NoPen)
+            for row in range(8):
+                for col in range(8):
+                    d = self.raw64[row * 8 + col]
+                    painter.setBrush(QBrush(self._color(d)))
+                    painter.drawRect(QRectF(
+                        col * cell_w + 0.5,
+                        bar_top + row * cell_h + 0.5,
+                        cell_w - 1,
+                        cell_h - 1,
+                    ))
+            # 최솟값 표시 후 리턴 (격자선 스킵)
+            min_d = min(self.raw64)
+            color_txt = self._color(min_d)
+            painter.setPen(QPen(color_txt))
+            f2 = painter.font(); f2.setPointSize(8); f2.setBold(True); painter.setFont(f2)
+            painter.drawText(0, bar_bot, w, self._VALUE_H,
+                             Qt.AlignHCenter | Qt.AlignVCenter,
+                             f"{min_d} mm")
+            return
+
         # ── 격자선 (bar_area 내) ───────────────────────────────────────
         painter.setPen(QPen(Constants.COLOR_GRID_LINE, 1))
         for frac in (0.25, 0.5, 0.75):
@@ -207,7 +245,7 @@ class ColorBarWidget(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedSize(40, 280)
+        self.setFixedSize(50, 280)
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -225,7 +263,12 @@ class ColorBarWidget(QWidget):
 
         painter.setPen(Qt.white)
         f = painter.font(); f.setPointSize(8); painter.setFont(f)
-        for text, pos in {"0m": 1.0, "0.3m": 1 - 300/4000,
-                           "1m": 1 - 1000/4000, "2m": 1 - 2000/4000,
-                           "4m+": 0.0}.items():
-            painter.drawText(22, int(rect.height() * pos) + 5, text)
+        lh = 14  # 레이블 행 높이
+        # 그라디언트 방향: 위=0m(위험), 아래=4m+(안전) — 레이블도 동일하게
+        for text, ratio in [("0m", 0.0), ("0.3m", 300/4000),
+                            ("1m", 1000/4000), ("2m", 2000/4000),
+                            ("4m+", 1.0)]:
+            cy = int(rect.height() * ratio)
+            ty = max(0, min(cy - lh // 2, int(rect.height()) - lh))
+            painter.drawText(22, ty, int(rect.width()) - 22, lh,
+                             Qt.AlignVCenter | Qt.AlignLeft, text)

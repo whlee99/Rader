@@ -215,20 +215,24 @@ class SensorSliderWidget(QWidget):
         type_lbl.setStyleSheet("font-size:10px; color:#aaa;")
         layout.addWidget(type_lbl)
 
-        top_lbl = QLabel(range_top)
+        top_lbl = QLabel("0m")
         top_lbl.setAlignment(Qt.AlignCenter)
         top_lbl.setStyleSheet("font-size:10px; color:#777;")
         layout.addWidget(top_lbl)
+
+        slider_h = 250 if self._dtype == "S1" else 100   # S1=10m, S2=4m 비율 반영
 
         self.slider = QSlider(Qt.Vertical)
         self.slider.setRange(0, self._max)
         self.slider.setValue(self._default)
         self.slider.setTickInterval(self._max // 4)
         self.slider.setTickPosition(QSlider.TicksBothSides)
-        self.slider.setMinimumHeight(180)
+        self.slider.setMinimumHeight(slider_h)
+        self.slider.setMaximumHeight(slider_h)
+        self.slider.setInvertedAppearance(True)
         layout.addWidget(self.slider, alignment=Qt.AlignHCenter)
 
-        bot_lbl = QLabel("0m")
+        bot_lbl = QLabel(range_top)
         bot_lbl.setAlignment(Qt.AlignCenter)
         bot_lbl.setStyleSheet("font-size:10px; color:#777;")
         layout.addWidget(bot_lbl)
@@ -239,6 +243,9 @@ class SensorSliderWidget(QWidget):
         layout.addWidget(self.val_lbl)
 
         self.slider.valueChanged.connect(self._on_value_changed)
+
+        # S2는 슬라이더가 짧으므로 남은 공간을 아래로 밀어 위 정렬
+        layout.addStretch(1)
 
     @Slot(int)
     def _on_value_changed(self, v: int):

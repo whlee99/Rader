@@ -58,9 +58,8 @@ QPushButton:pressed { background-color: #777; }
 """
 
 _STATUS_STYLE = {
-    "OK":       "background-color:#2e7d32; font-size:18px; font-weight:bold; padding:8px; border-radius:4px;",
-    "TILT":     "background-color:#e65100; font-size:18px; font-weight:bold; padding:8px; border-radius:4px;",
-    "OBSTACLE": "background-color:#b71c1c; font-size:18px; font-weight:bold; padding:8px; border-radius:4px;",
+    "OK":   "background-color:#2e7d32; font-size:18px; font-weight:bold; padding:8px; border-radius:4px;",
+    "FAIL": "background-color:#b71c1c; font-size:18px; font-weight:bold; padding:8px; border-radius:4px;",
 }
 _CONN_STYLE = {
     True:  "color:#4caf50; font-weight:bold;",
@@ -131,11 +130,14 @@ class SraderDashboard(QMainWindow):
         btn_row = QHBoxLayout()
         bar_btn  = QPushButton("Bar View")
         line_btn = QPushButton("Line View")
+        cell_btn = QPushButton("Cell View")
         bar_btn.clicked.connect(lambda: self._set_mode(DisplayMode.BAR))
         line_btn.clicked.connect(lambda: self._set_mode(DisplayMode.LINE))
+        cell_btn.clicked.connect(lambda: self._set_mode(DisplayMode.CELL))
         btn_row.addStretch()
         btn_row.addWidget(bar_btn)
         btn_row.addWidget(line_btn)
+        btn_row.addWidget(cell_btn)
         btn_row.addStretch()
         obs_lay.addLayout(btn_row)
 

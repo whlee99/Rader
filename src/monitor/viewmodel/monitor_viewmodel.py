@@ -15,7 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import QObject, Signal, Slot
+from PySide6.QtCore import QObject, Signal, Slot, QTimer
 
 from ..model.mqtt_model import MqttModel
 
@@ -23,7 +23,7 @@ from ..model.mqtt_model import MqttModel
 # ── 상태 정보 데이터클래스 ────────────────────────────────────────────────────
 @dataclass
 class StatusInfo:
-    level:   str   # "OK" | "TILT" | "OBSTACLE"
+    level:   str   # "OK" | "FAIL"
     message: str
     tilt_deg: float
     min_dist_mm: int
@@ -82,6 +82,17 @@ class MonitorViewModel(QObject):
         self._s1_buf: dict[str, int] = {}   # {"L": cm, "R": cm}
         # MAC → S2 디스플레이 슬롯 (config 로드 시 세팅, 없으면 도착 순서 자동 배정)
         self._mac_to_s2_slot: dict[str, int] = {}
+        # S2 슬롯별 현재 최솟값 (mm) — 모든 슬롯 누적 유지
+        self._s2_min_dist: dict[int, int] = {}
+
+        # ── 최신값 버퍼 (lossy coalescing) ────────────────────────────────────
+        # MQTT 네트워크 스레드가 빠르게 쌓아도 GUI는 항상 최신값만 처리
+        # 동일 MAC의 중간 패킷은 덮어써서 버림
+        self._pending: dict[str, dict] = {}   # mac → 최신 payload
+        self._drain_timer = QTimer(self)
+        self._drain_timer.setInterval(50)     # 50ms마다 드레인 (최대 20fps)
+        self._drain_timer.timeout.connect(self._drain_pending)
+        self._drain_timer.start()
 
         # Model 시그널 연결
         self._model.payload_received.connect(self._on_payload)
@@ -135,7 +146,8 @@ class MonitorViewModel(QObject):
                 self._mac_to_s2_slot[dev["mac"]] = s2_slot
                 s2_slot += 1
 
-        self._s1_buf.clear()   # 이전 버퍼 융기화
+        self._s1_buf.clear()      # 이전 버퍼 초기화
+        self._s2_min_dist.clear()  # S2 누적 상태 초기화
         s1_mapped = ", ".join(f"{m}→{r}" for m, r in self._mac_to_role.items()) or "(매핑 없음)"
         s2_mapped = ", ".join(f"{m}→슬롯{i}" for m, i in self._mac_to_s2_slot.items()) or "(매핑 없음)"
         msg = (f"config 로드 성공: {p}\n"
@@ -148,9 +160,23 @@ class MonitorViewModel(QObject):
         self.config_loaded.emit(True, msg)
         return True, msg
 
-    # ── Payload 처리 ──────────────────────────────────────────────────────────
+    # ── Payload 수신: 버퍼에 최신값 덮어쓰기 (coalescing) ───────────────────
     @Slot(dict)
     def _on_payload(self, data: dict):
+        mac = data.get("mac", "?")
+        self._pending[mac] = data   # 동일 MAC의 이전 미처리 패킷은 폐기
+
+    # ── 50ms 타이머: 버퍼 드레인 → MAC당 최신 1개만 처리 ────────────────────
+    @Slot()
+    def _drain_pending(self):
+        if not self._pending:
+            return
+        # 현재 버퍼 스냅샷을 가져오고 버퍼 초기화 (이후 도착분은 다음 주기)
+        snapshot, self._pending = self._pending, {}
+        for data in snapshot.values():
+            self._process(data)
+
+    def _process(self, data: dict):
         s1  = data.get("s1", [])
         s2  = data.get("s2", [])
         mac = data.get("mac", "?")
@@ -159,13 +185,14 @@ class MonitorViewModel(QObject):
         if s1:
             role = self._mac_to_role.get(mac, "")
             if role in ("L", "R"):
-                self._s1_buf[role] = s1[0]   # ESP32 1대 = TFmini 1개 → s1[0] 만 사용
+                self._s1_buf[role] = s1[0]
 
         left_cm  = self._s1_buf.get("L", 0)
         right_cm = self._s1_buf.get("R", 0)
 
         if self.SENSOR_GAP_CM > 0 and (left_cm or right_cm):
-            diff_cm  = left_cm - right_cm
+            # 센서는 위에서 아래를 봄: 거리 크다 = 바닥이 낮다 → 부호 반전
+            diff_cm  = right_cm - left_cm
             tilt_deg = math.degrees(math.atan(diff_cm / self.SENSOR_GAP_CM)) \
                        - self.BASELINE_OFFSET
         else:
@@ -178,37 +205,38 @@ class MonitorViewModel(QObject):
         )
 
         # ── S2: MAC → 슬롯 매핑으로 업데이트 ──────────────────────────────
-        # ESP32 1대 = VL53 1개: s2 배열의 첫 번째(index 0)만 사용
         if s2:
-            # 슬롯 결정: config 매핑 우선, 없으면 도착 순서로 자동 배정
             slot = self._mac_to_s2_slot.get(mac)
             if slot is None:
                 slot = len(self._mac_to_s2_slot)
                 self._mac_to_s2_slot[mac] = slot
 
-            d64  = s2[0].get("d", [4000] * 64)
-            cols = self._d64_to_cols(d64)
-            self.s2_updated.emit(slot, cols)
-            all_min = [min(cols)]
-        else:
-            all_min = []
+            d64 = s2[0].get("d", [4000] * 64)
+            self.s2_updated.emit(slot, d64)
+            self._s2_min_dist[slot] = min(d64)
 
-        min_dist = min(all_min) if all_min else 9999
+        # ── 전체 상태: 모든 S2 슬롯 + 기울기 종합 판단 ───────────────────────
+        overall_min = min(self._s2_min_dist.values()) if self._s2_min_dist else 9999
 
-        # ── 전체 상태 ─────────────────────────────────────────────────────────
-        if min_dist < self.THRESHOLD_MM:
-            status = StatusInfo("OBSTACLE", "!!! OBSTACLE DETECTED !!!", tilt_deg, min_dist)
-        elif abs(tilt_deg) > self.TILT_LIMIT_DEG:
-            status = StatusInfo("TILT", "TILT WARNING", tilt_deg, min_dist)
+        has_obstacle = overall_min < self.THRESHOLD_MM
+        has_tilt     = abs(tilt_deg) > self.TILT_LIMIT_DEG
+
+        if has_obstacle or has_tilt:
+            reasons = []
+            if has_obstacle:
+                reasons.append(f"OBSTACLE {overall_min}mm")
+            if has_tilt:
+                reasons.append(f"TILT {tilt_deg:.1f}°")
+            status = StatusInfo("FAIL", "FAIL: " + " | ".join(reasons), tilt_deg, overall_min)
         else:
-            status = StatusInfo("OK", "SYSTEM OK", tilt_deg, min_dist)
+            status = StatusInfo("OK", "SYSTEM OK", tilt_deg, overall_min)
 
         self.status_updated.emit(status)
 
         ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
         self.log_signal.emit(
             f"[{ts}]  MAC={mac}  tilt={tilt_deg:.1f}°  "
-            f"min_d={min_dist}mm  S2×{len(s2)}"
+            f"min_d={overall_min}mm  S2×{len(s2)}"
         )
 
     @staticmethod
