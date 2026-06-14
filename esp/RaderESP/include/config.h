@@ -14,7 +14,7 @@
 #define MQTT_PORT           1883
 #define MQTT_CLIENT_ID      "srader_esp32"
 #define MQTT_TOPIC          "RDR"
-#define MQTT_BUFFER_SIZE    768  // VL53L5CX d[]+st[]+nb[]+mac+ts 최대 ~640 bytes
+#define MQTT_BUFFER_SIZE    512
 
 // ── UDP (test network) ──────────────────────────────────
 #define UDP_MCAST_ADDR   "239.255.3.4"
@@ -57,4 +57,4 @@
 #define ETH_MDIO_PIN    18   // MDIO → LAN8720 MDIO  (10K Pull-up)
 #define ETH_CLK_PIN     17   // 50MHz CLK 출력 → LAN8720 XTAL1/CLKIN
 #define ETH_NRST_PIN    32   // nRST → LAN8720 nRST (active-LOW, GPIO 제어 필수)
-#define ETH_PHY_ADDR     1   // PHYAD0=VCC or floating → 주소 1 (Reg18 PHYAD=1 확인)
+#define ETH_PHY_ADDR     0   // PHYAD0=GND → 주소 0 (Reg18=PHYAD=1 이지만 addr=0 으로 정상 동작 확인)

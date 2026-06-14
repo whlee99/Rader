@@ -103,7 +103,7 @@ void loop() {
             if (tfmini_read(frame)) {
                 // RFP 3-2: {"mac":"AA:BB:CC:DD:EE:FF","ts":<ms>,"s1":[<dist_cm>]}
                 uint8_t mac[6];
-                esp_wifi_get_mac(WIFI_IF_STA, mac);
+                WiFi.macAddress(mac);
                 char macStr[18];
                 snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
                          mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
@@ -121,7 +121,7 @@ void loop() {
             if (vl53_read(frame)) {
                 // RFP 3-2: {"mac":"..","ts":<ms>,"s2":[{"d":[...],"st":[...],"nb":[...]}]}
                 uint8_t mac[6];
-                esp_wifi_get_mac(WIFI_IF_STA, mac);
+                WiFi.macAddress(mac);
                 char macStr[18];
                 snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
                          mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
