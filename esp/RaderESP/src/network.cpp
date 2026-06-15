@@ -62,12 +62,25 @@ bool net_connect(const Env &e) {
 // ─────────────────────────────────────────────────────
 // MQTT 연결
 // ─────────────────────────────────────────────────────
+// MAC 기반 고유 Client ID 생성 (srader_XXXXXXXXXXXX)
+static String s_clientId;
+
+static const String& get_client_id() {
+    if (s_clientId.isEmpty()) {
+        String mac = WiFi.macAddress();
+        mac.replace(":", "");
+        s_clientId = "srader_" + mac;
+    }
+    return s_clientId;
+}
+
 bool net_mqtt_connect(const Env &e) {
     s_mqtt.setServer(e.brokerip.c_str(), MQTT_PORT);
     s_mqtt.setBufferSize(MQTT_BUFFER_SIZE);
 
-    Serial.printf("[MQTT] Connecting to %s ...", e.brokerip.c_str());
-    if (s_mqtt.connect(MQTT_CLIENT_ID)) {
+    const String &cid = get_client_id();
+    Serial.printf("[MQTT] Connecting to %s (id=%s) ...", e.brokerip.c_str(), cid.c_str());
+    if (s_mqtt.connect(cid.c_str())) {
         Serial.println(" connected.");
         return true;
     }
@@ -77,8 +90,9 @@ bool net_mqtt_connect(const Env &e) {
 
 void net_mqtt_reconnect(const Env &e) {
     if (s_mqtt.connected()) return;
-    Serial.printf("[MQTT] Reconnecting to %s ...", e.brokerip.c_str());
-    if (s_mqtt.connect(MQTT_CLIENT_ID)) {
+    const String &cid = get_client_id();
+    Serial.printf("[MQTT] Reconnecting to %s (id=%s) ...", e.brokerip.c_str(), cid.c_str());
+    if (s_mqtt.connect(cid.c_str())) {
         Serial.println(" connected.");
     } else {
         Serial.printf(" failed (rc=%d)\n", s_mqtt.state());

@@ -1,5 +1,6 @@
  #include <Arduino.h>
 #include <WiFi.h>
+#include <Wire.h>
 #include "config.h"
 #include "env.h"
 #include "shell.h"
@@ -8,7 +9,8 @@
 #include "vl53.h"
 
 static Env  g_env;
-static bool g_useTFMini    = false;
+static SensorMode g_sensor = SENSOR_NONE;  // 3-state: TFMINI / VL53 / NONE
+static bool g_useLAN       = false;        // INTERFACE_SEL: false=WiFi, true=LAN8720
 static unsigned long lastPublishMs = 0;
 
 // ─────────────────────────────────────────────────────
@@ -25,45 +27,87 @@ static void errorHalt(const char *msg) {
 }
 
 // ─────────────────────────────────────────────────────
-void setup() {
-    Serial.begin(115200);
-    delay(200);
-
+// hw_init: shell 진입 전 모든 IO 초기화
+// ─────────────────────────────────────────────────────
+static void hw_init() {
+    // ── Status LED ───────────────────────────────────
     pinMode(PIN_STATUS_LED, OUTPUT);
-    setStatusLed(false);
+    digitalWrite(PIN_STATUS_LED, LOW);
 
+    // ── External LEDs ────────────────────────────────
     pinMode(PIN_M_LED_1, OUTPUT);
     pinMode(PIN_M_LED_2, OUTPUT);
     digitalWrite(PIN_M_LED_1, LOW);
     digitalWrite(PIN_M_LED_2, LOW);
 
+    // ── INTERFACE_SEL (입력전용, 외부 10kΩ Pull-down 필수) ──
+    pinMode(PIN_INTERFACE_SEL, INPUT);
+    g_useLAN = (digitalRead(PIN_INTERFACE_SEL) == HIGH);
+    Serial.printf("[HW] Interface : %s\n", g_useLAN ? "LAN8720" : "WiFi");
+
+    // ── VL53 INT (입력전용, 현재 미사용) ─────────────
+    pinMode(PIN_VL53_INT, INPUT);
+
+    // ── I2C 기본 초기화 (50kHz, VL53L5CX 기본값) ─────
+    Wire.begin(PIN_VL53_SDA, PIN_VL53_SCL);
+    Wire.setClock(50000);
+    Serial.printf("[HW] I2C ready : SDA=GPIO%d  SCL=GPIO%d  50kHz\n",
+                  PIN_VL53_SDA, PIN_VL53_SCL);
+}
+
+// ─────────────────────────────────────────────────────
+void setup() {
+    Serial.begin(115200);
+    delay(200);
+
+    // 모든 IO 초기화 (shell 진입 전)
+    hw_init();
+
     // NVS 에서 환경변수 로드
     env_load(g_env);
 
-    // Minishell (3초 타임아웃)
-    shell_run(g_env);
-
-    // WiFi 연결
-    if (!net_connect(g_env)) {
-        Serial.println("[MAIN] WARNING: WiFi connection failed. Continuing...");
+    // ── 센서 자동 감지 (shell 진입 전) ─────────────────
+    // 1) TFMini: UART2(GPIO16) 에서 500ms 유효 프레임 대기
+    // 2) VL53  : I2C 0x29 ACK 확인
+    // 3) NONE  : 둘 다 미응답
+    if (tfmini_detect()) {
+        g_sensor = SENSOR_TFMINI;
+        Serial.println("[MAIN] Sensor: TFMini Plus (UART2)");
+    } else {
+        Wire.beginTransmission(0x29);
+        uint8_t i2c_err = Wire.endTransmission();
+        if (i2c_err == 0) {
+            g_sensor = SENSOR_VL53;
+            Serial.println("[MAIN] Sensor: VL53L5CX (I2C 0x29 ACK)");
+        } else {
+            g_sensor = SENSOR_NONE;
+            Serial.printf("[MAIN] Sensor: NONE (TFmini no-frame, I2C err=%d)\n", i2c_err);
+        }
     }
 
-    // MQTT 연결
-    if (!net_mqtt_connect(g_env)) {
-        Serial.println("[MAIN] WARNING: MQTT connection failed. Will retry in loop.");
+    // Minishell (3초 타임아웃) — 감지 결과를 인수로 전달
+    shell_run(g_env, g_useLAN, g_sensor);
+
+    // 네트워크 연결 (INTERFACE_SEL 기반)
+    if (!g_useLAN) {
+        // WiFi 모드
+        if (!net_connect(g_env)) {
+            Serial.println("[MAIN] WARNING: WiFi connection failed. Continuing...");
+        }
+        if (!net_mqtt_connect(g_env)) {
+            Serial.println("[MAIN] WARNING: MQTT connection failed. Will retry in loop.");
+        }
+    } else {
+        // LAN8720 모드
+        Serial.println("[MAIN] LAN8720 mode — ETH main connect: TODO");
+        // TODO: net_eth_connect(g_env);
     }
 
     setStatusLed(true);
     Serial.println("[MAIN] System ready. Publishing to topic: " MQTT_TOPIC);
 
-    // ── 센서 자동 감지 ──────────────────────────────
-    // UART2(GPIO16)에서 TFMini 프레임 수신 시 → TFMini 모드
-    // 미수신 시 → Serial2.end() 후 GPIO16을 VL53L5CX I2C_RST 로 전환
-    g_useTFMini = tfmini_detect();
-    if (g_useTFMini) {
-        Serial.println("[MAIN] Sensor mode: TFMini Plus (UART2)");
-    } else {
-        Serial.println("[MAIN] Sensor mode: VL53L5CX (I2C)");
+    // vl53_begin() 은 센서 모드 확정 후
+    if (g_sensor == SENSOR_VL53) {
         vl53_begin();
     }
 }
@@ -87,9 +131,9 @@ void loop() {
     net_mqtt_loop();
 
     // ── 센서 버퍼 폴링 (매 loop) ──────────────────
-    if (g_useTFMini) {
+    if (g_sensor == SENSOR_TFMINI) {
         tfmini_update();
-    } else {
+    } else if (g_sensor == SENSOR_VL53) {
         vl53_update();
     }
 
@@ -98,7 +142,7 @@ void loop() {
     if (now - lastPublishMs >= PUBLISH_INTERVAL_MS) {
         lastPublishMs = now;
 
-        if (g_useTFMini) {
+        if (g_sensor == SENSOR_TFMINI) {
             TFFrame frame;
             if (tfmini_read(frame)) {
                 // RFP 3-2: {"mac":"AA:BB:CC:DD:EE:FF","ts":<ms>,"s1":[<dist_cm>]}
@@ -116,7 +160,7 @@ void loop() {
                               frame.dist, MQTT_TOPIC);
                 net_mqtt_publish(payload);
             }
-        } else {
+        } else if (g_sensor == SENSOR_VL53) {
             VL53Frame frame;
             if (vl53_read(frame)) {
                 // RFP 3-2: {"mac":"..","ts":<ms>,"s2":[{"d":[...],"st":[...],"nb":[...]}]}
@@ -126,8 +170,9 @@ void loop() {
                 snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
                          mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 
-                // d[], st[], nb[] 배열 직렬화 (최대 ~480 bytes)
-                char payload[640];
+                // d[], st[], nb[] 배열 직렬화
+                // 최대: d[]=383, st[]=255, nb[]=255, 구조=~60 → 약 953 bytes
+                char payload[1024];
                 int pos = 0;
                 pos += snprintf(payload + pos, sizeof(payload) - pos,
                                 "{\"mac\":\"%s\",\"ts\":%lu,\"s2\":[{\"d\":[",

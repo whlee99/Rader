@@ -8,13 +8,13 @@
 #define DEFAULT_IPMODE   1               // 0=Static, 1=DHCP
 #define DEFAULT_SSID     "spdio"
 #define DEFAULT_PWD      "dosadosa"
-#define DEFAULT_BROKER   "192.168.0.100" // RPI4 IP 로 변경
+#define DEFAULT_BROKER   "192.168.0.203" // RPi4 고정 IP
 
 // ── MQTT ─────────────────────────────────────────────
 #define MQTT_PORT           1883
-#define MQTT_CLIENT_ID      "srader_esp32"
+// MQTT_CLIENT_ID는 MAC 기반으로 런타임에 생성 (network.cpp)
 #define MQTT_TOPIC          "RDR"
-#define MQTT_BUFFER_SIZE    512
+#define MQTT_BUFFER_SIZE    1024
 
 // ── UDP (test network) ──────────────────────────────────
 #define UDP_MCAST_ADDR   "239.255.3.4"
@@ -46,8 +46,21 @@
 #define PIN_VL53_SDA     5   // I2C SDA
 #define PIN_VL53_SCL     4   // I2C SCL
 #define PIN_VL53_LPN     0   // LPN — 하드웨어에서 3.3V 고정, CPU 비연결 (코드 미사용)
-#define PIN_VL53_INT    34   // CX_INT (현재 미사용, 폴링 방식)
+#define PIN_VL53_INT    34   // CX_INT (현재 미사용, 폴링 방식), 입력전용 핀
 #define PIN_VL53_RST    16   // I2C_RST (TFMini RX 핀과 공유)
+
+// ── INTERFACE_SEL ──────────────────────────────────────
+// 입력전용 핀 (출력 불가), 내부 Pull 없음 → 외부 10kΩ Pull-down 필수
+// LOW (Open) = WiFi 모드,  HIGH (점퍼 → 3.3V) = LAN8720 모드
+#define PIN_INTERFACE_SEL  35
+
+// ── 센서 모드 ─────────────────────────────────────────
+enum SensorMode {
+    SENSOR_TFMINI = 0,   // TFmini Plus (UART2 GPIO16)
+    SENSOR_VL53   = 1,   // VL53L5CX   (I2C  SDA=GPIO5 SCL=GPIO4)
+    SENSOR_NONE   = 2,   // 미감지 (TFmini UART 없음 + I2C NACK)
+};
+
 #define VL53_UDP_PORT   8096
 
 // ── LAN8720 (RMII Ethernet) ──────────────────────────

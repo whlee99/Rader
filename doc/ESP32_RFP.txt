@@ -202,19 +202,55 @@
    Serial2.begin(..., RX_PIN, -1) 으로 TX 미할당 → GPIO17 해방.
    변경 후: TFMINI_TX_PIN = -1
 
-4.6 센터탭 바이어스 저항 (필수)
+4.6 RJ45 커넥터 — 품명, 배선, LED 연결
 
-   RJ45 내장 트랜스포머(RD1-125BAG1A 등)의 센터탭 핀에
-   49.9Ω (또는 47~51Ω 1%) 저항 → 3.3V 연결 필수.
+4.6.1 사용 부품
 
-   대상 핀:
-     TX 트랜스포머 센터탭 → 49.9Ω → 3.3V
-     RX 트랜스포머 센터탭 → 49.9Ω → 3.3V
+   품명  : RD1-125BAG1A
+   제조사: Bothhand (보스핸드)
+   타입  : 1×1 포트, 내장 트랜스포머(Integrated Magnetics) + 듀얼 LED
+   패키지: Through-Hole, 8P8C (RJ45)
+   규격  : 10/100Base-T 지원, IEEE 802.3 호환
+
+4.6.2 센터탭 바이어스 저항 (필수)
+
+   RD1-125BAG1A 는 내장 트랜스포머 센터탭 핀이 외부로 노출됨.
+   49.9Ω (또는 47~51Ω, 정밀도 1%) 저항 → 3.3V 연결 필수.
+
+   배선:
+     TX 트랜스포머 센터탭 핀 → 49.9Ω → 3.3V
+     RX 트랜스포머 센터탭 핀 → 49.9Ω → 3.3V
 
    미장착 시 공통 모드 전압 불안정 → TX 신호 왜형 → 스위치 미인식
    → DHCP 패킷 전송 실패 → 링크 불가.
    ※ 실측: 저항 미장착 시 링크가 10Mbps Half 로만 협상되고 DHCP 실패.
              저항 장착 후 100Mbps Full-Duplex 링크 및 DHCP 정상 동작 확인.
+
+4.6.3 LED 배선
+
+   RD1-125BAG1A 에는 LED 2개(Green / Yellow)가 내장되어 있으며,
+   외부 제한 저항을 통해 LAN8720 LED 출력에 직접 연결.
+
+   LAN8720 LED 핀 (24-QFN 기준):
+     LED1 (pin 20) : Link / Activity  — Active-Low, open-drain
+                     링크 확립 시 ON, 트래픽 발생 시 점멸
+     LED2 (pin 21) : Speed            — Active-Low, open-drain
+                     100Mbps=ON, 10Mbps=OFF
+
+   배선 (Active-Low 구동):
+     3.3V → 330Ω → RD1-125BAG1A Green  LED Anode (LEDG_A)
+                    RD1-125BAG1A Green  LED Cathode (LEDG_K) → LAN8720 LED1 (pin 20)
+
+     3.3V → 330Ω → RD1-125BAG1A Yellow LED Anode (LEDY_A)
+                    RD1-125BAG1A Yellow LED Cathode (LEDY_K) → LAN8720 LED2 (pin 21)
+
+   제한 저항 선택:
+     330Ω : 표준 밝기 (권장)
+     220Ω : 밝게
+     470Ω : 어둡게
+
+   ※ 실측 확인: LAN8720 LED1/LED2 → 330Ω → 3.3V / RD1-125BAG1A LED 핀 연결 후
+                100Mbps 링크 시 Green ON, Yellow ON 정상 점등 확인.
 
 4.7 test lan8720 (Minishell 명령)
 
@@ -241,7 +277,7 @@
   ────  ─────  ────────────────  ──────────────────────────  ──────────────────────────────
   IO2   OUT    Status LED        내장 LED                    정상=점등, 오류=점멸
   IO4   OUT    I2C SCL           VL53L5CX 보드 SCL           외부 2.2kΩ Pull-up → 3.3V
-  IO5   I/O    I2C SDA           VL53L5CX 보드 SDA           외부 2.2kΩ Pull-up → 3.3V
+  IO5   I/O    I2C SDA             보드 SDA           외부 2.2kΩ Pull-up → 3.3V
   IO13  OUT    M_LED_2           외부 LED 2                  3.3V 출력, 전류제한 저항 포함
   IO14  OUT    M_LED_1           외부 LED 1                  3.3V 출력, 전류제한 저항 포함
   IO16  IN/OUT TFMini RX / VL53_RST  TFMini Plus TX / I2C_RST  TFMini 감지 실패 시 I2C_RST로 전환
@@ -257,6 +293,7 @@
   IO27  IN     RMII CRS_DV       LAN8720 CRS_DV/MODE2       RMII 고정 핀, 10K Pull-up → 3.3V
   IO32  OUT    LAN8720 nRST      LAN8720 nRST               active-LOW, 10K Pull-up, 캐패시터 금지
   IO34  IN     VL53 INT          VL53L5CX 보드 INT          현재 미사용 (폴링 방식), 입력전용 핀
+  IO35  IN     INTERFACE_SEL     점퍼 (GND / 3.3V)          LOW=WiFi, HIGH=LAN8720, 외부 10kΩ Pull-down 필수
 
 5.2 미사용 핀 (Reserved / NC)
 
@@ -267,7 +304,6 @@
   IO12  NC      부트 시 HIGH 시 3.3V 레귤레이터 모드 변경 위험 — 사용 주의
   IO15  NC      부트 시 로그 출력 영향 — 사용 주의
   IO33  NC      미할당
-  IO35  NC      입력전용 핀, 미할당
   IO36  NC      입력전용 핀 (VP), 미할당
   IO39  NC      입력전용 핀 (VN), 미할당
 
@@ -292,6 +328,27 @@
   Speed LED            LAN8720 LED2 (pin 21, Active-Low) → 330Ω → 3.3V → RJ45 LED_K
   ※ 센터탭 저항 미장착 시: 10Mbps Half 로만 링크, DHCP 실패.
      장착 후 확인: 100Mbps Full-Duplex, DHCP 정상, Ping OK.
+
+5.6 INTERFACE_SEL 배선 (IO35)
+
+  IO35 는 입력전용 핀 (출력 불가). 내부 Pull-up/Pull-down 없음 → 외부 저항 필수.
+
+  배선:
+    IO35 ──── 10kΩ ──── GND          (기본 Pull-down)
+    점퍼 단락 시: IO35 ──── 3.3V     (HIGH = LAN8720 모드)
+
+  동작:
+    점퍼 없음 (Open) : IO35 = LOW  → WiFi 모드
+    점퍼 단락        : IO35 = HIGH → LAN8720 모드
+
+  코드:
+    #define INTERFACE_SEL_PIN  35
+    // setup() 내:
+    bool useLAN = digitalRead(INTERFACE_SEL_PIN);  // HIGH=LAN8720, LOW=WiFi
+
+  ※ 플로팅 금지: 10kΩ Pull-down 미장착 시 부팅마다 불확정 동작.
+  ※ IO35 는 출력 설정(pinMode OUTPUT) 불가 — 입력 전용.
+
 
 5.5 센서 자동 선택 로직 (부팅 시)
 

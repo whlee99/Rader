@@ -122,6 +122,7 @@ static void printHelp() {
   Serial.println("  test i2c          VL53L5CX I2C 주소(0x29/0x52) 감지, SDA/SCL 교체 포함");
   Serial.println("  test lan8720      LAN8720 PHY ID(MDIO) + 링크 확인 + GW ping");
   Serial.println("  test led          M_LED_1/2 동시 ON/OFF 토글 (3회)");
+    Serial.println("  probe             현재 IO 상태 표시 (INTERFACE_SEL, LED, VL53_INT)");
     Serial.println("  run               Shell 종료 → main 실행");
     Serial.println("  reboot            ESP32 재시작");
     Serial.println("  help              이 도움말");
@@ -130,7 +131,7 @@ static void printHelp() {
 // ─────────────────────────────────────────────────────
 // Minishell 진입
 // ─────────────────────────────────────────────────────
-void shell_run(Env &e) {
+void shell_run(Env &e, bool useLAN, SensorMode sensorMode) {
     Serial.println("\n================================");
     Serial.println("   RADER Minishell  v1.0");
     Serial.println("================================");
@@ -170,12 +171,16 @@ void shell_run(Env &e) {
     Serial.println("\nEntered shell. Type 'help' for commands.");
     printHelp();
 
-    // Shell 진입 시 WiFi 연결
-    Serial.println("[NET] Connecting WiFi...");
-    if (net_connect(e)) {
-        Serial.println("[NET] WiFi connected.");
+    // Shell 진입 시 네트워크 연결 (INTERFACE_SEL 기반)
+    if (digitalRead(PIN_INTERFACE_SEL) == LOW) {
+        Serial.println("[NET] Connecting WiFi...");
+        if (net_connect(e)) {
+            Serial.println("[NET] WiFi connected.");
+        } else {
+            Serial.println("[NET] WiFi failed. Check ssid/pwd/ip settings.");
+        }
     } else {
-        Serial.println("[NET] WiFi failed. Check ssid/pwd/ip settings.");
+        Serial.println("[NET] LAN8720 mode — use 'test lan8720' to initialize ETH.");
     }
 
     // ── 헬퍼: 키워드 뒤 인라인 값 추출, 없으면 프롬프트로 입력 받기
@@ -247,6 +252,21 @@ void shell_run(Env &e) {
             String v = getValue(cmd, "set brockerip", "Broker IP");
             if (v.length() > 0) { e.brokerip = v; env_save(e); Serial.println("  Saved."); }
 
+        } else if (cmd == "probe") {
+            Serial.println("[PROBE] ── 선택된 인터페이스 / 센서 ──────────────────────────");
+            Serial.printf("[PROBE] Network  : %s  (IO35=%s)\n",
+                          useLAN ? "LAN8720" : "WiFi",
+                          useLAN ? "HIGH" : "LOW");
+            const char *sensorStr;
+            switch (sensorMode) {
+                case SENSOR_TFMINI: sensorStr = "TFmini Plus  (UART2 GPIO16)";             break;
+                case SENSOR_VL53:   sensorStr = "VL53L5CX     (I2C SDA=GPIO5 SCL=GPIO4)"; break;
+                case SENSOR_NONE:   sensorStr = "NONE         (센서 미감지 — 배선 확인 필요)"; break;
+                default:            sensorStr = "UNKNOWN"; break;
+            }
+            Serial.printf("[PROBE] Sensor   : %s\n", sensorStr);
+            Serial.println("[PROBE] ────────────────────────────────────────────────────");
+
         } else if (cmd == "test led") {
             Serial.println("[LED] Blinking M_LED_1 (IO14) & M_LED_2 (IO13) x3...");
             for (int i = 0; i < 3; i++) {
@@ -298,6 +318,9 @@ void shell_run(Env &e) {
                 }
             }
             Wire.end();
+            // I2C 기본값 복구 (hw_init 상태로 복원)
+            Wire.begin(PIN_VL53_SDA, PIN_VL53_SCL);
+            Wire.setClock(50000);
             if (!anyFound) {
                 Serial.println("[I2C] Not found at any speed or pin combo.");
                 Serial.println("[I2C] Check: VIN=5V, VDD=3.3V, SDA/SCL wiring, LPN=3.3V");
