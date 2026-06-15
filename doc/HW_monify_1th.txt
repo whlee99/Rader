@@ -1,0 +1,26 @@
+
+1. J4 INTERFACE_SEL 
+   1) IO12 에 3v3 전원이 들어 가면 booting 못함 따라서, 
+      IO35 에 연결, Jumper ON 시 IO 에 3v3 전원이 직접 들어 가지 않도록 damping 처리, 또는 OFF 시 Pull-UP, ON 시 GND 상태가 되도록 수정   
+
+2. J3 TFmini Plus 연결 
+
+   1) R30 OPEN 
+   2) R31 IO16(UART2_RXD) 와 연결 
+   
+3. J2 VL53L5CX Pololu 연결 
+   
+   1) R21 0R 
+   2) R25 OPEN  : J2 의 6번핀 LPN 은 CPU 연결 없이 3v3 Pull-up 으로 수정해야함. 
+   3) R26 OPEN
+   4) R27 OPEN  : GPIO16 의 I2S_RST 는 사용하지 않고, GPIO16 은 UART2_RXD 로 사용. 
+   
+4. U3 LAN8720 연견 
+
+   1) C8 OPEN 
+   2) pin 15, nRST 는 CPU 의 IO32 와 연결하여 Control 해야함. 
+   3) U3 LAN8720 의 VDD33 은 직접 연결하지 말고, bead를 사용해야함. 
+
+   4) U1 RJ45 의 R2-3-5-6 에 49.9 1% 저항을 3v3 에 pull-up 해야함. 
+   5) U1 RJ45 의 9-10-11-12 LED 전원 (+,-)가 반대로 연결 되어 있음. 
+ 
