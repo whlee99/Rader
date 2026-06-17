@@ -83,7 +83,7 @@ class SetupWindow(QMainWindow):
         self._tabs.addTab(self._tab_mapping(),     "② 장치 매핑")
         self._tabs.addTab(self._tab_calibration(), "③ Calibration")
         self._tabs.addTab(self._tab_local_save(),  "④ 로컬 저장")
-        self._tabs.addTab(self._tab_ssh_push(),    "⑤ SSH Push")
+        self._tabs.addTab(self._tab_mqtt_publish(), "⑤ RPi4에 전송")
 
     # ── 탭 1: 브로커 연결 ─────────────────────────────────────────────────────
     def _tab_connection(self) -> QWidget:
@@ -324,44 +324,42 @@ class SetupWindow(QMainWindow):
 
         return w
 
-    # ── 탭 5: SSH Push ────────────────────────────────────────────────────────
-    def _tab_ssh_push(self) -> QWidget:
+    # ── 탭 5: MQTT Publish ────────────────────────────────────────────────────
+    def _tab_mqtt_publish(self) -> QWidget:
         w   = QWidget()
         lay = QVBoxLayout(w)
         lay.setSpacing(8)
 
         info = QLabel(
-            "RPi4 에 SSH(SCP)로 config.json 을 전송합니다.\n"
-            "실제 장비 연결 시에만 필요합니다. 시뮬레이션 중에는 '④ 로컬 저장' 탭을 사용하세요."
+            "config JSON 을 MQTT 'RDR/config' 토픽에 retain=True 로 publish 합니다.\n"
+            "RPi4 Monitor 앱이 해당 토픽을 구독하면 자동으로 수신에 로컬 저장합니다.\n"
+            "· 브로커에 접속된 상태에서만 동작합니다 (탭① 연결 필수).\n"
+            "· SSH/SCP 및 별도 인증 정보 불필요."
         )
         info.setWordWrap(True)
         info.setStyleSheet("color:#aaa; font-size:11px;")
         lay.addWidget(info)
 
-        ssh_box = QGroupBox("SSH 접속 정보")
-        ssh_form = QFormLayout(ssh_box)
-        ssh_form.setLabelAlignment(Qt.AlignRight)
+        pub_box = QGroupBox("MQTT config 배포")
+        pub_lay = QVBoxLayout(pub_box)
 
-        self.ssh_host_edit = QLineEdit("192.168.0.203")
-        self.ssh_user_edit = QLineEdit("pi")
-        self.ssh_pass_edit = QLineEdit()
-        self.ssh_pass_edit.setEchoMode(QLineEdit.Password)
-        self.ssh_path_edit = QLineEdit("/etc/rader/config.json")
+        topic_row = QHBoxLayout()
+        topic_row.addWidget(QLabel("TOPIC :"))
+        topic_lbl = QLabel("RDR/config  (retain=True, QoS=1)")
+        topic_lbl.setStyleSheet("color:#4fc3f7; font-weight:bold;")
+        topic_row.addWidget(topic_lbl)
+        topic_row.addStretch()
+        pub_lay.addLayout(topic_row)
 
-        ssh_form.addRow("Host :",       self.ssh_host_edit)
-        ssh_form.addRow("User :",       self.ssh_user_edit)
-        ssh_form.addRow("Password :",   self.ssh_pass_edit)
-        ssh_form.addRow("원격 경로 :",  self.ssh_path_edit)
-        lay.addWidget(ssh_box)
+        self.publish_status_lbl = QLabel("")
+        self.publish_status_lbl.setWordWrap(True)
+        pub_lay.addWidget(self.publish_status_lbl)
 
-        self.ssh_status_lbl = QLabel("")
-        self.ssh_status_lbl.setWordWrap(True)
-        lay.addWidget(self.ssh_status_lbl)
-
-        push_btn = QPushButton("SSH Push 실행 → RPi4")
-        push_btn.setObjectName("pushBtn")
-        push_btn.clicked.connect(self._on_ssh_push)
-        lay.addWidget(push_btn, alignment=Qt.AlignRight)
+        publish_btn = QPushButton("config Publish → RPi4 Monitor")
+        publish_btn.setObjectName("pushBtn")
+        publish_btn.clicked.connect(self._on_mqtt_publish)
+        pub_lay.addWidget(publish_btn, alignment=Qt.AlignRight)
+        lay.addWidget(pub_box)
         lay.addStretch()
 
         return w
@@ -375,7 +373,7 @@ class SetupWindow(QMainWindow):
         self._vm.log_signal.connect(self._append_log)
         self._vm.mqtt_connected.connect(self._on_mqtt_connected)
         self._vm.mqtt_disconnected.connect(self._on_mqtt_disconnected)
-        self._vm.ssh_result.connect(self._on_ssh_result)
+        self._vm.publish_result.connect(self._on_publish_result)
         self._vm.config_preview_updated.connect(self.config_preview.setPlainText)
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -552,24 +550,19 @@ class SetupWindow(QMainWindow):
         self._append_log(msg)
 
     @Slot()
-    def _on_ssh_push(self):
-        self.ssh_status_lbl.setText("전송 중...")
-        self.ssh_status_lbl.setStyleSheet("color:#FFC107;")
-        self._vm.ssh_push(
-            host        = self.ssh_host_edit.text().strip(),
-            user        = self.ssh_user_edit.text().strip(),
-            password    = self.ssh_pass_edit.text(),
-            remote_path = self.ssh_path_edit.text().strip(),
-        )
+    def _on_mqtt_publish(self):
+        self.publish_status_lbl.setText("전송 중...")
+        self.publish_status_lbl.setStyleSheet("color:#FFC107;")
+        self._vm.mqtt_publish_config()
 
     @Slot(bool, str)
-    def _on_ssh_result(self, ok: bool, msg: str):
+    def _on_publish_result(self, ok: bool, msg: str):
         if ok:
-            self.ssh_status_lbl.setText(f"✓ {msg}")
-            self.ssh_status_lbl.setStyleSheet("color:#4caf50;")
+            self.publish_status_lbl.setText(f"✓ {msg}")
+            self.publish_status_lbl.setStyleSheet("color:#4caf50;")
         else:
-            self.ssh_status_lbl.setText(f"✗ {msg}")
-            self.ssh_status_lbl.setStyleSheet("color:#f44336;")
+            self.publish_status_lbl.setText(f"✗ {msg}")
+            self.publish_status_lbl.setStyleSheet("color:#f44336;")
         self._append_log(msg)
 
     def _append_log(self, msg: str):

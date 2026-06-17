@@ -117,15 +117,17 @@
       │ rader_setup      │ Windows/Linux PC     │ Setup(Provisioning) UI │
       │ (PySide6)        │ (현장 임시 접속)     │ 초기 설정·Calibration  │
       └──────────────────┴──────────────────────┴────────────────────────┘
-    * Setup UI 방식: 현장 PC 네이티브 애플리케이션(rader_setup) + MQTT 직접 구독 + SSH config push
+    * Setup UI 방식: 현장 PC 네이티브 애플리케이션(rader_setup) + MQTT 직접 구독 + MQTT config 배포
       ※ RPi4에 웹 서버·중계 로직 불필요. PC가 브로커에 직접 접속하여 센서 데이터 수신.
       ※ 현장 PC는 초기 설정 시에만 필요. 완료 후 분리 가능.
+      ※ SSH 접속·자격증명 불필요. 기존 MQTT 포트(1883)만 사용.
       [Setup 세션 절차]
         1. 현장 PC의 Setup 앱이 RPi4 MQTT Broker에 직접 접속하여 "RDR" 토픽 구독.
         2. ESP32가 송신하는 텔레메트리 패킷을 PC가 브로커를 통해 실시간 수신.
         3. PC Setup 앱에서 실시간 센서 데이터를 보며 전체 설정 완료.
-        4. PC가 SSH(SCP)로 RPi4의 지정된 config 파일을 업데이트.
-        5. RPi4가 config 리로드 후 정상 모드 복귀. 현장 PC 분리.
+        4. PC가 "RDR/config" 토픽에 retain=True, QoS=1로 config JSON을 publish.
+        5. RPi4 Monitor 앱이 해당 토픽 수신 → 로컬 config 파일 저장 → 정상 모드 복귀.
+           (Monitor 시작 시 로컬 파일 있으면 즉시 사용; 없으면 "RDR/config" 수신 대기)
     * 핵심 개발 내용:
         1. [Telemetry] MQTT 수신 모듈:
             * ESP32로부터 TOPIC "RDR"로 수신된 센서 raw 데이터를 파싱하여 GUI에 전달.
@@ -161,7 +163,8 @@
                   - PC Setup 앱이 RPi4 MQTT Broker에 직접 접속하여 "RDR" 토픽 구독.
                   - ESP32 텔레메트리 패킷을 PC가 실시간 수신 (RPi4 중계 불필요).
                   - PC 앱에서 실시간 센서 데이터를 확인하며 모든 설정 완료.
-                  - SSH(SCP)로 RPi4의 지정된 config 파일 업데이트 후 세션 종료.
+                  - "RDR/config" 토픽에 retain=True, QoS=1로 config JSON publish 후 세션 종료.
+                  - Monitor 앱이 수신 즉시 로컬 저장 → 정상 운영 전환.
                   - RPi4에 별도 모니터/키보드 불필요. 설정 완료 후 PC 분리.
                 * MAC 기반 센서 위치 매핑 설정:
                   MAC 주소는 ESP32가 MQTT payload에 자동 포함하여 전송하므로 별도 입력 불필요.
@@ -268,10 +271,11 @@
 
 
 3-3. Provisioning (Setup PC → RPi4)
-  구간   : Setup PC → RPi4
-  목적   : 현장 초기 설정값을 RPi4에 등록
+  구간   : Setup PC → RPi4 (MQTT를 통한 간접 전달)
+  목적   : 현장 초기 설정값을 RPi4 Monitor 앱에 등록
   특성   : 본 프로젝트에서 정의하는 포맷 (설계 가능)
   시점   : 초기 설치 시 1회 또는 현장 조건 변경 시
+  전송수단: MQTT Retained Message (SSH/SCP 불필요)
 
   3-3-1. Provisioning 세션 절차
 
@@ -281,17 +285,31 @@
     │  1   │ Setup PC 앱이 RPi4 MQTT Broker에 접속, "RDR" 토픽 구독  │
     │  2   │ ESP32 Telemetry 패킷 실시간 수신 (3-2 payload 동일)      │
     │  3   │ PC 앱에서 MAC 확인, 위치 매핑 및 전체 Calibration 완료  │
-    │  4   │ PC 앱이 SSH(SCP)로 RPi4 config 파일 push                │
-    │  5   │ RPi4 config 리로드 → 정상 운영 모드 복귀                │
+    │  4   │ PC 앱이 "RDR/config" 토픽에 retain=True, QoS=1로        │
+    │      │ config JSON publish                                      │
+    │  5   │ RPi4 Monitor 앱이 "RDR/config" 수신 → 로컬 파일 저장   │
+    │  6   │ Monitor 앱이 새 config 적용 → 정상 운영 모드 복귀       │
     └──────┴──────────────────────────────────────────────────────────┘
 
-  3-3-2. Provisioning Config 파일 (SSH push 대상)
+    ※ Retained Message 특성:
+       - 브로커가 최신 config를 항상 보관.
+       - Monitor 앱이 나중에 접속해도 구독 즉시 최신 config 수신 가능.
+       - 순서 의존성 없음 (Setup PC가 먼저 publish해도 무방).
 
-    * 전송 방식 : SSH(SCP)
-    * 파일 경로 : RPi4 내 지정 경로 (예: /etc/rader/config.json)
-    * 파일 형식 : JSON
+    ※ Monitor 시작 로직:
+       - 로컬 config 파일(rader_config.json) 있음 → 즉시 로드 후 정상 동작.
+       - 로컬 config 파일 없음 → "config 대기 중" 상태 표시,
+         "RDR/config" 구독 후 수신 시 저장 → 정상 동작 전환.
 
-    Config 파일 구조:
+  3-3-2. Provisioning Config 배포 (MQTT Retained Message)
+
+    * 전송 방식 : MQTT publish (retain=True, QoS=1)
+    * TOPIC     : "RDR/config"
+    * Broker    : RPi4 Mosquitto (192.168.0.203:1883)
+    * 파일 형식 : JSON (UTF-8)
+    * 로컬 저장 : Monitor 앱이 수신 후 rader_config.json 으로 저장
+
+    Config JSON 구조 (publish 및 로컬 저장 공통):
     ┌─────────────────────────────────────────────────────────────┐
     │ {                                                           │
     │   "devices": [                                             │
@@ -311,7 +329,9 @@
     │ }                                                           │
     └─────────────────────────────────────────────────────────────┘
 
-    * RPi4는 config 파일 변경 감지(inotify 등) 또는 재시작으로 설정값 반영.
+    * Monitor 앱은 수신된 JSON을 rader_config.json 으로 로컬 저장.
+    * 브로커에 retained 보관 → Monitor 재시작, 네트워크 단절 후 재접속 시에도
+      별도 Setup 세션 없이 자동으로 최신 config 복원.
 
 
 4. 네트워크 구성도
@@ -356,9 +376,9 @@
 
 4-2. 셋업 모드 (Provisioning Mode)
   * 초기 설치 또는 설정 변경 시에만 사용. Setup PC를 네트워크에 임시 연결.
-  * Setup PC는 두 가지 독립 통신을 동시에 사용:
-    - MQTT 구독 ("RDR", 192.168.0.203:1883) : 실시간 센서 데이터 수신
-    - SSH / SCP  (192.168.0.203)             : config 파일 push
+  * Setup PC는 MQTT 단일 통신만 사용 (SSH/SCP 불필요):
+    - MQTT 구독 ("RDR",        192.168.0.203:1883) : 실시간 센서 데이터 수신
+    - MQTT publish ("RDR/config", 192.168.0.203:1883, retain=True) : config 배포
 
   [WiFi AP / Router]  192.168.0.1
          |
@@ -371,16 +391,17 @@
   |               | MQTT|                  |MQTT "RDR"          |
   | Telemetry  ---+---->| Mosquitto    <---+----구독(수신)      |
   | 송신          |"RDR"| (Broker)         |   |                |
-  +---------------+     |                  |SSH| Setup App      |
-                        | config 파일  <---+SCP| (Provisioning) |
-                        | 갱신·리로드      |   | config push    |
-                        |                  |   +----------------+
-                        | PySide6          |
-                        | Operation UI     |
+  +---------------+     |                  |MQTT| Setup App      |
+                        | "RDR/config" <---+"RDR/config"        |
+                        | 수신 → 로컬 저장 |retain=True         |
+                        |                  |   | config publish  |
+                        | PySide6          |   +----------------+
+                        | Monitor UI       |
                         | (LCD)            |
                         +------------------+
 
   * Mosquitto 다중 구독 지원. RPi4와 Setup PC가 동시에 "RDR" 구독해도 간섭 없음.
-  * Setup PC의 MQTT/SSH 접속 대상: 192.168.0.203 고정.
-  * 설정 완료 후 Setup PC 분리 → 운용 모드로 자동 전환.
+  * Setup PC의 MQTT 접속 대상: 192.168.0.203:1883 고정.
+  * config publish 후 Setup PC 분리 → 운용 모드로 자동 전환.
+  * 브로커가 "RDR/config" retained message 보관 → Monitor 재시작 시에도 즉시 수신 가능.
 

@@ -14,7 +14,7 @@
       "mac": "A4:CF:12:00:00:03",
       "type": "S2",
       "s2": [
-        "pos1"
+        "pos5"
       ],
       "active_s2": 1
     },
@@ -22,7 +22,7 @@
       "mac": "A4:CF:12:00:00:07",
       "type": "S2",
       "s2": [
-        "pos5"
+        "pos1"
       ],
       "active_s2": 1
     },
@@ -51,8 +51,8 @@
       "active_s2": 1
     }
   ],
-  "sensor_gap_cm": 1200.0,
-  "baseline_offset": -4.716,
+  "sensor_gap_cm": 50.0,
+  "baseline_offset": 0.0,
   "tilt_limit_deg": 15.0,
   "threshold_mm": 300
 }

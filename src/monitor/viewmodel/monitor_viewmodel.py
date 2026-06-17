@@ -51,38 +51,30 @@ class MonitorViewModel(QObject):
     mqtt_disconnected   = Signal()
     config_loaded       = Signal(bool, str)  # (success, message)
 
-    # Calibration 기본값 (config 로드 시 교체)
-    _SENSOR_GAP_CM   = 50.0
-    _BASELINE_OFFSET = 0.0
-    _TILT_LIMIT_DEG  = 15.0
-    _THRESHOLD_MM    = 300
-
-    # 하위호환성: 기존 코드가 클래스 상수를 참조할 수 있도록
-    SENSOR_GAP_CM   = property(lambda self: self._SENSOR_GAP_CM)
-    BASELINE_OFFSET = property(lambda self: self._BASELINE_OFFSET)
-    TILT_LIMIT_DEG  = property(lambda self: self._TILT_LIMIT_DEG)
-    THRESHOLD_MM    = property(lambda self: self._THRESHOLD_MM)
-
     # config 파일: 프로젝트 루트 / config / rader_config.json
-    # __file__ = .../src/monitor/viewmodel/monitor_viewmodel.py → .parent×4 = 프로젝트 루트
     CONFIG_PATH = (Path(__file__).resolve().parent.parent.parent.parent
                    / "config" / "rader_config.json")
 
     def __init__(self, model: MqttModel, parent=None):
         super().__init__(parent)
         self._model = model
-        # Calibration 값 (인스턴스 변수로 관리)
-        self._SENSOR_GAP_CM   = 50.0
-        self._BASELINE_OFFSET = 0.0
-        self._TILT_LIMIT_DEG  = 15.0
-        self._THRESHOLD_MM    = 300
-        # MAC → 역할("L"/"R") 매핑 테이블 (config 로드 시 교체)
-        self._mac_to_role: dict[str, str] = {}
+
+        # 로드된 config dict (전체) — 프로그램 시작 시 읽고, MQTT 수신 시 갱신
+        self._config: dict = {
+            "sensor_gap_cm":   50.0,
+            "baseline_offset": 0.0,
+            "tilt_limit_deg":  15.0,
+            "threshold_mm":    300,
+            "devices":         [],
+        }
+
+        # config에서 파생된 빠른 조회용 캐시
+        self._mac_to_role: dict[str, str] = {}      # mac → "L" | "R"
+        self._mac_to_s2_slot: dict[str, int] = {}   # mac → slot index
+
         # L/R 최신값 저장 버퍼
         self._s1_buf: dict[str, int] = {}   # {"L": cm, "R": cm}
-        # MAC → S2 디스플레이 슬롯 (config 로드 시 세팅, 없으면 도착 순서 자동 배정)
-        self._mac_to_s2_slot: dict[str, int] = {}
-        # S2 슬롯별 현재 최솟값 (mm) — 모든 슬롯 누적 유지
+        # S2 슬롯별 현재 최솟값 (mm)
         self._s2_min_dist: dict[int, int] = {}
 
         # ── 최신값 버퍼 (lossy coalescing) ────────────────────────────────────
@@ -96,6 +88,7 @@ class MonitorViewModel(QObject):
 
         # Model 시그널 연결
         self._model.payload_received.connect(self._on_payload)
+        self._model.config_received.connect(self._on_config_received)
         self._model.log_signal.connect(self.log_signal)
         self._model.connected.connect(self.mqtt_connected)
         self._model.disconnected.connect(self.mqtt_disconnected)
@@ -127,38 +120,67 @@ class MonitorViewModel(QObject):
             self.config_loaded.emit(False, msg)
             return False, msg
 
-        # Calibration 상수 적용
-        self._SENSOR_GAP_CM   = float(cfg.get("sensor_gap_cm",  50.0))
-        self._BASELINE_OFFSET = float(cfg.get("baseline_offset", 0.0))
-        self._TILT_LIMIT_DEG  = float(cfg.get("tilt_limit_deg", 15.0))
-        self._THRESHOLD_MM    = int(cfg.get("threshold_mm", 300))
+        # config dict 전체를 저장 (runtime 에서 직접 참조)
+        self._config = cfg
 
-        # MAC → 역할 매핑 구성
+        # 빠른 조회용 캐시 재구성
         self._mac_to_role.clear()
         self._mac_to_s2_slot.clear()
-        s2_slot = 0
+        s2_auto = 0   # label 파싱 실패 시 폴백용 카운터
         for dev in cfg.get("devices", []):
             if dev.get("type") == "S1":
                 role = dev.get("s1", "")
                 if role in ("L", "R"):
                     self._mac_to_role[dev["mac"]] = role
             elif dev.get("type") == "S2":
-                self._mac_to_s2_slot[dev["mac"]] = s2_slot
-                s2_slot += 1
+                # "pos1"~"pos10" → 0-based slot (pos1=0, pos2=1, ...)
+                label = (dev.get("s2") or [""])[0]
+                try:
+                    slot = int(label.replace("pos", "")) - 1
+                    if slot < 0:
+                        raise ValueError
+                except (ValueError, AttributeError):
+                    slot = s2_auto   # 파싱 불가 시 등장 순서 사용
+                self._mac_to_s2_slot[dev["mac"]] = slot
+                s2_auto += 1
 
-        self._s1_buf.clear()      # 이전 버퍼 초기화
-        self._s2_min_dist.clear()  # S2 누적 상태 초기화
+        self._s1_buf.clear()       # 이전 버퍼 초기화
+        self._s2_min_dist.clear()   # S2 누적 상태 초기화
         s1_mapped = ", ".join(f"{m}→{r}" for m, r in self._mac_to_role.items()) or "(매핑 없음)"
         s2_mapped = ", ".join(f"{m}→슬롯{i}" for m, i in self._mac_to_s2_slot.items()) or "(매핑 없음)"
         msg = (f"config 로드 성공: {p}\n"
                f"  S1 매핑: {s1_mapped}\n"
                f"  S2 매핑: {s2_mapped}\n"
-               f"  gap={self._SENSOR_GAP_CM}cm  "
-               f"baseline={self._BASELINE_OFFSET}°  "
-               f"tilt_limit={self._TILT_LIMIT_DEG}°  "
-               f"threshold={self._THRESHOLD_MM}mm")
+               f"  gap={self._config.get('sensor_gap_cm', 50.0)}cm  "
+               f"baseline={self._config.get('baseline_offset', 0.0)}°  "
+               f"tilt_limit={self._config.get('tilt_limit_deg', 15.0)}°  "
+               f"threshold={self._config.get('threshold_mm', 300)}mm")
         self.config_loaded.emit(True, msg)
         return True, msg
+
+    # ── MQTT 수신 config (RDR/config retained) ──────────────────────────
+    @Slot(str)
+    def _on_config_received(self, json_text: str):
+        """Setup PC로부터 RDR/config 토픽으로 수신한 config JSON을
+        로컬 파일로 저장하고 즉시 적용.
+        기존 파일과 내용이 동일하면 저장/로드를 건너뜀 (재접속 반복 방지)."""
+        # 기존 파일과 동일한 내용이면 무시
+        if self.CONFIG_PATH.exists():
+            try:
+                existing = self.CONFIG_PATH.read_text(encoding="utf-8")
+                if existing.strip() == json_text.strip():
+                    return   # 변경 없음 — 조용히 무시
+            except Exception:
+                pass
+
+        try:
+            self.CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            self.CONFIG_PATH.write_text(json_text, encoding="utf-8")
+            self.log_signal.emit("[config] MQTT로 config 수신 → 로컬 저장 완료")
+        except Exception as e:
+            self.log_signal.emit(f"[config] 로컬 저장 실패: {e}")
+            return
+        self.load_config()
 
     # ── Payload 수신: 버퍼에 최신값 덮어쓰기 (coalescing) ───────────────────
     @Slot(dict)
@@ -190,11 +212,14 @@ class MonitorViewModel(QObject):
         left_cm  = self._s1_buf.get("L", 0)
         right_cm = self._s1_buf.get("R", 0)
 
-        if self.SENSOR_GAP_CM > 0 and (left_cm or right_cm):
-            # 센서는 위에서 아래를 봄: 거리 크다 = 바닥이 낮다 → 부호 반전
+        gap_cm       = float(self._config.get("sensor_gap_cm",   50.0))
+        baseline     = float(self._config.get("baseline_offset",  0.0))
+        tilt_limit   = float(self._config.get("tilt_limit_deg",  15.0))
+        threshold_mm =   int(self._config.get("threshold_mm",     300))
+
+        if gap_cm > 0 and (left_cm or right_cm):
             diff_cm  = right_cm - left_cm
-            tilt_deg = math.degrees(math.atan(diff_cm / self.SENSOR_GAP_CM)) \
-                       - self.BASELINE_OFFSET
+            tilt_deg = math.degrees(math.atan(diff_cm / gap_cm)) - baseline
         else:
             tilt_deg = 0.0
 
@@ -207,19 +232,16 @@ class MonitorViewModel(QObject):
         # ── S2: MAC → 슬롯 매핑으로 업데이트 ──────────────────────────────
         if s2:
             slot = self._mac_to_s2_slot.get(mac)
-            if slot is None:
-                slot = len(self._mac_to_s2_slot)
-                self._mac_to_s2_slot[mac] = slot
+            if slot is not None:   # config 매핑된 슬롯만 처리
+                d64 = s2[0].get("d", [4000] * 64)
+                self.s2_updated.emit(slot, d64)
+                self._s2_min_dist[slot] = min(d64)
 
-            d64 = s2[0].get("d", [4000] * 64)
-            self.s2_updated.emit(slot, d64)
-            self._s2_min_dist[slot] = min(d64)
-
-        # ── 전체 상태: 모든 S2 슬롯 + 기울기 종합 판단 ───────────────────────
+        # ── 전체 상태: 모든 S2 슬롯 + 기울기 종합 판단 ────────────────────────
         overall_min = min(self._s2_min_dist.values()) if self._s2_min_dist else 9999
 
-        has_obstacle = overall_min < self.THRESHOLD_MM
-        has_tilt     = abs(tilt_deg) > self.TILT_LIMIT_DEG
+        has_obstacle = overall_min < threshold_mm
+        has_tilt     = abs(tilt_deg) > tilt_limit
 
         if has_obstacle or has_tilt:
             reasons = []

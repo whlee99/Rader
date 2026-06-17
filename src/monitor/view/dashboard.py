@@ -175,7 +175,7 @@ class SraderDashboard(QMainWindow):
         self._vm.log_signal.connect(self._append_log)
         self._vm.mqtt_connected.connect(self._on_connected)
         self._vm.mqtt_disconnected.connect(self._on_disconnected)
-
+        self._vm.config_loaded.connect(self._on_config_loaded)
     # ── 슬롯 ──────────────────────────────────────────────────────────────────
     @Slot(str, str)
     def _on_s1_labels(self, left: str, right: str):
@@ -192,6 +192,19 @@ class SraderDashboard(QMainWindow):
         self.status_lbl.setText(info.message)
         self.status_lbl.setStyleSheet(_STATUS_STYLE.get(info.level, _STATUS_STYLE["OK"]))
         self.min_dist_lbl.setText(f"최소 감지 거리: {info.min_dist_mm} mm")
+
+    @Slot(bool, str)
+    def _on_config_loaded(self, ok: bool, msg: str):
+        if ok:
+            self.status_lbl.setText("SYSTEM OK  (config 로드완료)")
+            self.status_lbl.setStyleSheet(_STATUS_STYLE["OK"])
+        else:
+            self.status_lbl.setText("⏳ config 대기 중 — Setup PC에서 RDR/config 전송하세요")
+            self.status_lbl.setStyleSheet(
+                "background-color:#e65100; font-size:16px; "
+                "font-weight:bold; padding:8px; border-radius:4px;"
+            )
+        self._append_log(msg)
 
     @Slot()
     def _on_connected(self):

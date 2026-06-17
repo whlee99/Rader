@@ -19,15 +19,7 @@ from PySide6.QtCore import QObject, Signal, Slot
 
 from ..model.config_model import RaderConfig, DeviceConfig
 
-# monitor 의 MqttModel 을 그대로 재사용
 from src.monitor.model.mqtt_model import MqttModel
-
-# ── SSH Push ──────────────────────────────────────────────────────────────────
-try:
-    import paramiko
-    SSH_AVAILABLE = True
-except ImportError:
-    SSH_AVAILABLE = False
 
 # config 로컬 저장 경로
 # config 파일: 프로젝트 루트(src 의 부모) / config / rader_config.json
@@ -55,7 +47,7 @@ class SetupViewModel(QObject):
         log_signal(str)
         mqtt_connected()
         mqtt_disconnected()
-        ssh_result(bool, str)                      — (성공, 메시지)
+        publish_result(bool, str)                  — (성공, 메시지)
         config_preview_updated(str)                — JSON 미리보기 텍스트
     """
 
@@ -64,12 +56,12 @@ class SetupViewModel(QObject):
     log_signal            = Signal(str)
     mqtt_connected        = Signal()
     mqtt_disconnected     = Signal()
-    ssh_result            = Signal(bool, str)
+    publish_result        = Signal(bool, str)   # (success, message)
     config_preview_updated = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._model  = MqttModel()
+        self._model  = MqttModel(client_id="rader_setup")
         self._config = RaderConfig()
         self._devices: dict[str, DeviceSnapshot] = {}   # mac → snapshot
 
@@ -243,37 +235,17 @@ class SetupViewModel(QObject):
             self._log(msg)
             return False, msg
 
-    # ── SSH Push ──────────────────────────────────────────────────────────────
-    def ssh_push(self, host: str, user: str, password: str,
-                 remote_path: str = "/etc/rader/config.json"):
-        """별도 스레드에서 SSH push 실행 (GUI 블록 방지)"""
-        if not SSH_AVAILABLE:
-            self.ssh_result.emit(False, "paramiko 미설치 — pip install paramiko")
-            return
-
-        json_text = self._config.to_json()
-
-        def _worker():
-            try:
-                client = paramiko.SSHClient()
-                client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-                client.connect(host, username=user, password=password, timeout=10)
-
-                # 원격 디렉터리 생성
-                remote_dir = str(Path(remote_path).parent).replace("\\", "/")
-                client.exec_command(f"mkdir -p {remote_dir}")
-
-                # SCP (SFTP로 구현)
-                sftp = client.open_sftp()
-                with sftp.open(remote_path, "w") as f:
-                    f.write(json_text)
-                sftp.close()
-                client.close()
-                self.ssh_result.emit(True, f"Push 완료 → {host}:{remote_path}")
-            except Exception as exc:
-                self.ssh_result.emit(False, str(exc))
-
-        threading.Thread(target=_worker, daemon=True).start()
+    # ── MQTT Publish Config ───────────────────────────────────────────────────
+    def mqtt_publish_config(self):
+        """RDR/config 토픽에 retain=True, QoS=1 로 config JSON publish.
+        브로커에 연결된 상태에서만 동작."""
+        ok = self._model.publish_config(self._config.to_json())
+        if ok:
+            msg = "config publish 성공 → RPi4 Monitor가 수신하면 자동 저장됩니다"
+        else:
+            msg = "브로커에 미접속 — 탭①에서 브로커에 먼저 접속하세요"
+        self.publish_result.emit(ok, msg)
+        self._log(msg)
 
     # ── 내부 로그 ─────────────────────────────────────────────────────────────
     def _log(self, msg: str):

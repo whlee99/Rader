@@ -14,7 +14,8 @@
    2) R25 OPEN  : J2 의 6번핀 LPN 은 CPU 연결 없이 3v3 Pull-up 으로 수정해야함. 
    3) R26 OPEN
    4) R27 OPEN  : GPIO16 의 I2S_RST 는 사용하지 않고, GPIO16 은 UART2_RXD 로 사용. 
-   
+                 => Hanness 에서 rst line 을 제거 해도 된다. 
+				 
 4. U3 LAN8720 연견 
 
    1) C8 OPEN 

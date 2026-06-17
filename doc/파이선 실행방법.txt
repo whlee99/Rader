@@ -10,7 +10,6 @@ Python 가상환경 실행 방법
 ■ 설치된 주요 패키지
     PySide6      6.11.1   - GUI 프레임워크
     paho-mqtt    2.1.0    - MQTT 클라이언트
-    paramiko     5.0.0    - SSH / SCP
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -29,15 +28,16 @@ Python 가상환경 실행 방법
 2. 가상환경 활성화 없이 직접 실행 (권장)
 ---------------------------------------
     프로젝트 루트에서 .venv 내부 python 인터프리터를 직접 지정.
+    ※ monitor / setup 은 패키지 import 구조로 인해 반드시 -m 모듈 방식 사용.
 
     ▶ 에뮬레이터 실행
     .venv\Scripts\python tool\edge_emulator.py
 
     ▶ monitor 앱 실행
-    .venv\Scripts\python src\monitor\main.py
+    .venv\Scripts\python -m src.monitor.main
 
     ▶ setup 앱 실행
-    .venv\Scripts\python src\setup\main.py
+    .venv\Scripts\python -m src.setup.main
 
     ▶ 임의 스크립트 실행
     .venv\Scripts\python <스크립트 경로>
@@ -71,3 +71,27 @@ Python 가상환경 실행 방법
     PlatformIO 는 ~/.platformio/ 내부의 독립 Python 을 사용.
     본 .venv 와 완전히 분리되어 있으므로 충돌 없음.
     PIO 빌드/업로드와 Python 앱 실행은 동시에 가능.
+
+
+7. PC 시뮬레이션 테스트 순서
+---------------------------------------
+    전제: localhost:1883 에서 Mosquitto 가 실행 중이어야 함.
+    터미널 3개를 각각 열고 아래 순서대로 실행.
+
+    [터미널 1] 가상 ESP32 에뮬레이터
+    cd D:\git.whlee2\Rader
+    .venv\Scripts\python tool\edge_emulator.py
+    → Broker: localhost, Port: 1883, 시작 버튼 클릭
+
+    [터미널 2] Monitor
+    cd D:\git.whlee2\Rader
+    .venv\Scripts\python -m src.monitor.main
+    → config 없으면 주황 배너 "config 대기 중" 표시됨
+
+    [터미널 3] Setup
+    cd D:\git.whlee2\Rader
+    .venv\Scripts\python -m src.setup.main
+    → 탭① localhost:1883 연결 → 장치 감지 확인
+    → 탭② MAC 매핑, 탭③ Calibration 설정
+    → 탭⑤ "config Publish → RPi4 Monitor" 클릭
+    → Monitor 가 config 수신 후 초록 "SYSTEM OK" 로 전환되면 성공
