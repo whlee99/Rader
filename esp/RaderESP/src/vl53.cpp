@@ -82,9 +82,10 @@ void vl53_begin() {
     }
 
     s_sensor.setResolution(VL53L5CX_RESOLUTION_8X8);
+    s_sensor.setRangingFrequency(15);  // 8x8 최대 15Hz (~67ms/frame)
     s_sensor.startRanging();
     s_ready = true;
-    Serial.printf("[VL53] Ready — 8x8 mode, SDA=GPIO%d, SCL=GPIO%d\n",
+    Serial.printf("[VL53] Ready — 8x8 mode 15Hz, SDA=GPIO%d, SCL=GPIO%d\n",
                   PIN_VL53_SDA, PIN_VL53_SCL);
 }
 

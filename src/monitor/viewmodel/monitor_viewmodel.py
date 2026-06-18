@@ -233,9 +233,12 @@ class MonitorViewModel(QObject):
         if s2:
             slot = self._mac_to_s2_slot.get(mac)
             if slot is not None:   # config 매핑된 슬롯만 처리
-                d64 = s2[0].get("d", [4000] * 64)
+                d64  = s2[0].get("d",  [4000] * 64)
+                st64 = s2[0].get("st", [0]    * 64)
+                # target_status == 5, 범위초과(65535) 제외, 크로스토크 하한(30mm) 제외
+                valid = [d for d, s in zip(d64, st64) if s == 5 and 30 <= d < 65535]
                 self.s2_updated.emit(slot, d64)
-                self._s2_min_dist[slot] = min(d64)
+                self._s2_min_dist[slot] = min(valid) if valid else 9999
 
         # ── 전체 상태: 모든 S2 슬롯 + 기울기 종합 판단 ────────────────────────
         overall_min = min(self._s2_min_dist.values()) if self._s2_min_dist else 9999
