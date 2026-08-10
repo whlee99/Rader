@@ -33,7 +33,7 @@ class DeviceConfig:
     type:      str        # "S1" | "S2"
     s1:        str        = ""    # S1 전용: "L" 또는 "R" (장치 자체의 역할)
     s2:        list[str]  = field(default_factory=lambda: [""])   # S2 전용
-    active_s2: int        = 1                                     # S2 전용
+    active_s2: int        = 64                                    # S2 전용 (max: 64 zone)
 
 
 # ── 전체 Config ───────────────────────────────────────────────────────────────
@@ -78,7 +78,7 @@ class RaderConfig:
                 type      = dtype,
                 s1        = dev.get("s1", "") if dtype == "S1" else "",
                 s2        = dev.get("s2", [""]) if dtype == "S2" else [""],
-                active_s2 = dev.get("active_s2", 1),
+                active_s2 = dev.get("active_s2", 64),
             ))
         return cls(
             devices         = devs,

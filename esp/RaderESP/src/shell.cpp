@@ -3,6 +3,8 @@
 #include "network.h"
 #include <Arduino.h>
 #include <Wire.h>
+#include <WiFi.h>
+#include <ETH.h>
 
 // ─────────────────────────────────────────────────────
 // 히스토리 (최대 10개)
@@ -102,27 +104,15 @@ static String readLine() {
     return line;
 }
 
-static String prompt_input(const char *label) {
-    Serial.printf("  %s : ", label);
-    return readLine();
-}
-
 static void printHelp() {
     Serial.println();
     Serial.println("  printenv          env 전체 출력");
-    Serial.println("  set mac           MAC 주소 설정 (재부팅 후 적용)");
-    Serial.println("  set ip            Static IP 설정");
-    Serial.println("  set gw            게이트웨이 설정");
-    Serial.println("  set mask          서브넷 마스크 설정");
-    Serial.println("  set ipmode        IP 모드 (0=Static, 1=DHCP)");
-    Serial.println("  set ssid          WiFi SSID 설정");
-    Serial.println("  set pwd           WiFi 패스워드 설정");
-    Serial.println("  set brockerip     MQTT 브로커 IP 설정");
     Serial.println("  test network      UDP Multicast 로 env 송출");
-  Serial.println("  test i2c          VL53L5CX I2C 주소(0x29/0x52) 감지, SDA/SCL 교체 포함");
-  Serial.println("  test lan8720      LAN8720 PHY ID(MDIO) + 링크 확인 + GW ping");
-  Serial.println("  test led          M_LED_1/2 동시 ON/OFF 토글 (3회)");
-    Serial.println("  probe             현재 IO 상태 표시 (INTERFACE_SEL, LED, VL53_INT)");
+    Serial.println("  test i2c          VL53L5CX I2C 주소(0x29/0x52) 감지, SDA/SCL 교체 포함");
+    Serial.println("  test lan8720      LAN8720 PHY ID(MDIO) + 링크 확인 + GW ping");
+    Serial.println("  test led          M_LED_1/2/3 동시 토글(3회) → 1→2→3 순차 점등");
+    Serial.println("  test dipsw        DIP SW 현재 값 표시 (0~3, SW0=LSB)");
+    Serial.println("  probe             현재 IO/모드 상태 표시");
     Serial.println("  run               Shell 종료 → main 실행");
     Serial.println("  reboot            ESP32 재시작");
     Serial.println("  help              이 도움말");
@@ -131,18 +121,19 @@ static void printHelp() {
 // ─────────────────────────────────────────────────────
 // Minishell 진입
 // ─────────────────────────────────────────────────────
-void shell_run(Env &e, bool useLAN, SensorMode sensorMode) {
+void shell_run(Env &e, int netMode, SensorMode sensorMode) {
     Serial.println("\n================================");
     Serial.println("   RADER Minishell  v1.0");
     Serial.println("================================");
     Serial.printf("Press any key within %d sec...\n", SHELL_TIMEOUT_MS / 1000);
 
-    // 3초 타임아웃 (대기 중 M_LED_1 / M_LED_2 교대 점멸)
+    // 3초 타임아웃 (대기 중 M_LED_1 / M_LED_2 교대 점멸, active-LOW)
     unsigned long deadline    = millis() + SHELL_TIMEOUT_MS;
     unsigned long ledToggleMs = millis();
-    bool ledState = false;   // false: LED1=ON, LED2=OFF
-    digitalWrite(PIN_M_LED_1, HIGH);
-    digitalWrite(PIN_M_LED_2, LOW);
+    bool ledState = false;   // false: LED1=ON(LOW), LED2=OFF(HIGH)
+    digitalWrite(PIN_M_LED_1, LOW);   // LED1 ON
+    digitalWrite(PIN_M_LED_2, HIGH);  // LED2 OFF
+    digitalWrite(PIN_M_LED_3, HIGH);  // LED3 OFF
 
     bool entered = false;
     while (millis() < deadline) {
@@ -154,14 +145,16 @@ void shell_run(Env &e, bool useLAN, SensorMode sensorMode) {
         if (millis() - ledToggleMs >= 250) {
             ledToggleMs = millis();
             ledState = !ledState;
-            digitalWrite(PIN_M_LED_1, ledState ? LOW  : HIGH);
-            digitalWrite(PIN_M_LED_2, ledState ? HIGH : LOW);
+            // active-LOW: LOW=ON, HIGH=OFF
+            digitalWrite(PIN_M_LED_1, ledState ? HIGH : LOW);
+            digitalWrite(PIN_M_LED_2, ledState ? LOW  : HIGH);
         }
     }
 
-    // Shell 종료 시 두 LED 모두 ON
-    digitalWrite(PIN_M_LED_1, HIGH);
-    digitalWrite(PIN_M_LED_2, HIGH);
+    // Shell 종료 시 3개 LED 모두 ON (active-LOW)
+    digitalWrite(PIN_M_LED_1, LOW);
+    digitalWrite(PIN_M_LED_2, LOW);
+    digitalWrite(PIN_M_LED_3, LOW);
 
     if (!entered) {
         Serial.println("[SHELL] Timeout → starting main.\n");
@@ -171,30 +164,17 @@ void shell_run(Env &e, bool useLAN, SensorMode sensorMode) {
     Serial.println("\nEntered shell. Type 'help' for commands.");
     printHelp();
 
-    // Shell 진입 시 네트워크 연결 (INTERFACE_SEL 기반)
-    if (digitalRead(PIN_INTERFACE_SEL) == LOW) {
-        Serial.println("[NET] Connecting WiFi...");
-        if (net_connect(e)) {
-            Serial.println("[NET] WiFi connected.");
-        } else {
-            Serial.println("[NET] WiFi failed. Check ssid/pwd/ip settings.");
-        }
+    // 네트워크는 shell 진입 전 setup() 에서 이미 초기화됨 — 상태만 표시
+    if (netMode < 2) {
+        Serial.printf("[NET] WiFi mode %d — SSID: %s  Broker: %s  Status: %s\n",
+                      netMode, e.ssid.c_str(), e.brokerip.c_str(),
+                      (WiFi.status() == WL_CONNECTED) ? "Connected" : "Not connected");
     } else {
-        Serial.println("[NET] LAN8720 mode — use 'test lan8720' to initialize ETH.");
+        Serial.printf("[NET] LAN8720 mode — IP: %s\n",
+                      ETH.localIP().toString().c_str());
     }
 
-    // ── 헬퍼: 키워드 뒤 인라인 값 추출, 없으면 프롬프트로 입력 받기
-    auto getValue = [&](const String &cmd, const char *key, const char *label) -> String {
-        String prefix = String(key) + " ";
-        if (cmd.startsWith(prefix)) {
-            String v = cmd.substring(prefix.length());
-            v.trim();
-            return v;
-        }
-        return prompt_input(label);
-    };
-
-    // 명령 루프
+    // ── 명령 루프
     while (true) {
         printPrompt();
         String cmd = readLine();
@@ -206,57 +186,59 @@ void shell_run(Env &e, bool useLAN, SensorMode sensorMode) {
 
         } else if (cmd == "printenv") {
             env_print(e);
-
-        } else if (cmd == "set mac" || cmd.startsWith("set mac ")) {
-            String v = getValue(cmd, "set mac", "MAC (XX:XX:XX:XX:XX:XX)");
-            if (v.length() > 0) {
-                e.mac = v;
-                env_save(e);
-                Serial.println("  Saved. Reboot required for MAC to take effect.");
-            }
-
-        } else if (cmd == "set ip" || cmd.startsWith("set ip ")) {
-            String v = getValue(cmd, "set ip", "Static IP");
-            if (v.length() > 0) { e.ip = v; env_save(e); Serial.println("  Saved."); }
-
-        } else if (cmd == "set gw" || cmd.startsWith("set gw ")) {
-            String v = getValue(cmd, "set gw", "Gateway");
-            if (v.length() > 0) { e.gw = v; env_save(e); Serial.println("  Saved."); }
-
-        } else if (cmd == "set mask" || cmd.startsWith("set mask ")) {
-            String v = getValue(cmd, "set mask", "Subnet Mask");
-            if (v.length() > 0) { e.mask = v; env_save(e); Serial.println("  Saved."); }
-
-        } else if (cmd == "set ipmode" || cmd.startsWith("set ipmode ")) {
-            String v = getValue(cmd, "set ipmode", "IP Mode (0=Static, 1=DHCP)");
-            if (v.length() > 0) {
-                int mode = v.toInt();
-                if (mode == 0 || mode == 1) {
-                    e.ipmode = mode;
-                    env_save(e);
-                    Serial.printf("  Saved. Mode: %s\n", mode == 0 ? "Static" : "DHCP");
-                } else {
-                    Serial.println("  Invalid value. Use 0 or 1.");
-                }
-            }
-
-        } else if (cmd == "set ssid" || cmd.startsWith("set ssid ")) {
-            String v = getValue(cmd, "set ssid", "SSID");
-            if (v.length() > 0) { e.ssid = v; env_save(e); Serial.println("  Saved."); }
-
-        } else if (cmd == "set pwd" || cmd.startsWith("set pwd ")) {
-            String v = getValue(cmd, "set pwd", "Password");
-            if (v.length() > 0) { e.pwd = v; env_save(e); Serial.println("  Saved."); }
-
-        } else if (cmd == "set brockerip" || cmd.startsWith("set brockerip ")) {
-            String v = getValue(cmd, "set brockerip", "Broker IP");
-            if (v.length() > 0) { e.brokerip = v; env_save(e); Serial.println("  Saved."); }
+            int sw0 = digitalRead(PIN_DIP_SW0);
+            int sw1 = digitalRead(PIN_DIP_SW1);
+            const char* modeNames[] = {
+                "WiFi        (SSID=TRDR,  Broker=192.168.0.203)",
+                "WiFi-Dev    (SSID=spdio, Broker=192.168.0.20)",
+                "LAN8720 RSV (10 → 11과 동일)",
+                "LAN8720 UTP"
+            };
+            Serial.println("─────────────────────────────────");
+            Serial.printf("  dipsw    : SW1(VN)=%d  SW0(VP)=%d  →  Mode %d%d: %s\n",
+                          sw1, sw0, sw1, sw0, modeNames[netMode]);
+            Serial.println("─────────────────────────────────");
 
         } else if (cmd == "probe") {
-            Serial.println("[PROBE] ── 선택된 인터페이스 / 센서 ──────────────────────────");
-            Serial.printf("[PROBE] Network  : %s  (IO35=%s)\n",
-                          useLAN ? "LAN8720" : "WiFi",
-                          useLAN ? "HIGH" : "LOW");
+            const char* modeStr;
+            switch (netMode) {
+                case NET_WIFI:     modeStr = "WiFi        (SSID=TRDR,  Broker=192.168.0.203)"; break;
+                case NET_WIFI_DEV: modeStr = "WiFi-Dev    (SSID=spdio, Broker=192.168.0.20)";  break;
+                case NET_LAN_RSV:  modeStr = "LAN8720 RSV (10 → 11과 동일)";                   break;
+                case NET_LAN:      modeStr = "LAN8720     (UTP)";                              break;
+                default:           modeStr = "UNKNOWN";                                       break;
+            }
+            int sw0 = digitalRead(PIN_DIP_SW0);
+            int sw1 = digitalRead(PIN_DIP_SW1);
+            Serial.println("[PROBE] ── 선택된 인터페이스 / 센서 ─────────────────────────");
+            Serial.printf("[PROBE] DIP SW   : SW1(VN)=%d SW0(VP)=%d → Mode=%d%d: %s\n",
+                          sw1, sw0, sw1, sw0, modeStr);
+            // 오류 코드 실시간 평가
+            ErrorCode errCode = ERR_NONE;
+            if (netMode < 2) {
+                if (WiFi.status() != WL_CONNECTED)           errCode = ERR_WIFI_LOST;
+                else if (WiFi.localIP() == IPAddress(0,0,0,0)) errCode = ERR_DHCP_FAIL;
+                else if (!net_mqtt_connected())              errCode = ERR_MQTT_FAIL;
+            } else {
+                if (!ETH.linkUp())                           errCode = ERR_ETH_DOWN;
+                else if (ETH.localIP() == IPAddress(0,0,0,0)) errCode = ERR_DHCP_FAIL;
+                else if (!net_mqtt_connected())              errCode = ERR_MQTT_FAIL;
+            }
+            if (errCode == ERR_NONE && sensorMode == SENSOR_NONE)
+                errCode = ERR_SENSOR_NONE;
+
+            struct { const char *name; const char *desc; const char *led; } errInfo[] = {
+                {"NONE(0)",        "정상",                    "상시 ON"},
+                {"SENSOR_NONE(1)", "부팅 시 센서 미감지",    "1000ms 느린 점멸"},
+                {"WIFI_LOST(2)",   "WiFi 연결 끝김",       " 200ms 빠른 점멸"},
+                {"ETH_DOWN(3)",    "LAN8720 링크 다운",    " 200ms 빠른 점멸"},
+                {"DHCP_FAIL(4)",   "DHCP IP 할당 실패",     " 200ms 빠른 점멸"},
+                {"MQTT_FAIL(5)",   "MQTT 브로커 연결 실패", " 200ms 빠른 점멸"},
+            };
+            Serial.printf("[PROBE] Error    : %s  |  %s  |  LED3=%s\n",
+                          errInfo[errCode].name,
+                          errInfo[errCode].desc,
+                          errInfo[errCode].led);
             const char *sensorStr;
             switch (sensorMode) {
                 case SENSOR_TFMINI: sensorStr = "TFmini Plus  (UART2 GPIO16)";             break;
@@ -268,16 +250,29 @@ void shell_run(Env &e, bool useLAN, SensorMode sensorMode) {
             Serial.println("[PROBE] ────────────────────────────────────────────────────");
 
         } else if (cmd == "test led") {
-            Serial.println("[LED] Blinking M_LED_1 (IO14) & M_LED_2 (IO13) x3...");
+            // ── Phase 1: 3개 동시 ON/OFF 토글 3회 (active-LOW) ──────
+            Serial.println("[LED] Phase1: M_LED_1/2/3 동시 토글 x3...");
             for (int i = 0; i < 3; i++) {
-                digitalWrite(PIN_M_LED_1, HIGH);
-                digitalWrite(PIN_M_LED_2, HIGH);
-                Serial.println("  ON");
-                delay(500);
                 digitalWrite(PIN_M_LED_1, LOW);
                 digitalWrite(PIN_M_LED_2, LOW);
-                Serial.println("  OFF");
+                digitalWrite(PIN_M_LED_3, LOW);
+                Serial.printf("  [%d] ON\n", i + 1);
                 delay(500);
+                digitalWrite(PIN_M_LED_1, HIGH);
+                digitalWrite(PIN_M_LED_2, HIGH);
+                digitalWrite(PIN_M_LED_3, HIGH);
+                Serial.printf("  [%d] OFF\n", i + 1);
+                delay(500);
+            }
+            // ── Phase 2: 1→2→3 순서로 1초 간격 ON/OFF ─────────────
+            Serial.println("[LED] Phase2: 1→2→3 순차 점등...");
+            const int seqPins[] = {PIN_M_LED_1, PIN_M_LED_2, PIN_M_LED_3};
+            for (int i = 0; i < 3; i++) {
+                Serial.printf("  LED%d ON\n", i + 1);
+                digitalWrite(seqPins[i], LOW);
+                delay(1000);
+                digitalWrite(seqPins[i], HIGH);
+                Serial.printf("  LED%d OFF\n", i + 1);
             }
             Serial.println("[LED] Done.");
 
@@ -331,6 +326,13 @@ void shell_run(Env &e, bool useLAN, SensorMode sensorMode) {
 
         } else if (cmd == "test lan8720") {
             net_eth_test(e);
+
+        } else if (cmd == "test dipsw") {
+            int sw0 = digitalRead(PIN_DIP_SW0);
+            int sw1 = digitalRead(PIN_DIP_SW1);
+            int val = (sw1 << 1) | sw0;
+            Serial.printf("[DIPSW] SW1(VN)=%d  SW0(VP)=%d  →  Value=%d\n",
+                          sw1, sw0, val);
 
         } else if (cmd == "run") {
             Serial.println("[SHELL] Exiting → starting main.\n");

@@ -19,6 +19,7 @@ from .view.setup_window import SetupWindow, STYLESHEET
 
 def main():
     app = QApplication(sys.argv)
+    app.setStyle("Fusion")
     app.setStyleSheet(STYLESHEET)
 
     signal.signal(signal.SIGINT, lambda *_: app.quit())

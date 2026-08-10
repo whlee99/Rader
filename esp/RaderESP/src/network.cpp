@@ -243,6 +243,60 @@ static void mdio_write_reg(uint8_t phy_addr, uint8_t reg, uint16_t val) {
 static bool s_eth_initialized = false;
 
 // ─────────────────────────────────────────────────────
+// LAN8720 프로덕션 연결: ETH.begin → PHY 소프트 리셋 → 링크 → DHCP IP 대기
+// shell 진입 전 setup() 에서 호출
+// ─────────────────────────────────────────────────────
+bool net_eth_connect(const Env &e) {
+    Serial.printf("[ETH] Connecting: phy_addr=%d  nRST=GPIO%d  CLK=GPIO17\n",
+                  ETH_PHY_ADDR, ETH_NRST_PIN);
+
+    if (!s_eth_initialized) {
+        if (!ETH.begin(ETH_PHY_ADDR, ETH_NRST_PIN, ETH_MDC_PIN, ETH_MDIO_PIN,
+                       ETH_PHY_LAN8720, ETH_CLOCK_GPIO17_OUT)) {
+            Serial.println("[ETH] ETH.begin() failed.");
+            return false;
+        }
+        s_eth_initialized = true;
+        delay(50);
+
+        // PHY 소프트 리셋 → AN 재시작 (Loopback 잔류 방지)
+        mdio_write_reg(ETH_PHY_ADDR, 0, 0x8000);
+        for (int i = 0; i < 20; i++) {
+            delay(50);
+            if (!(mdio_read_reg(ETH_PHY_ADDR, 0) & 0x8000)) break;
+        }
+        mdio_write_reg(ETH_PHY_ADDR, 0, (1<<13)|(1<<12)|(1<<9));
+        delay(20);
+    }
+
+    // 링크 업 대기 (최대 5초)
+    Serial.print("[ETH] Waiting for link");
+    unsigned long t = millis();
+    while (!ETH.linkUp() && millis() - t < 5000) { delay(200); Serial.print("."); }
+    Serial.println();
+    if (!ETH.linkUp()) {
+        Serial.println("[ETH] Link timeout.");
+        return false;
+    }
+    Serial.printf("[ETH] Link up: %dMbps %s\n",
+                  ETH.linkSpeed(), ETH.fullDuplex() ? "Full" : "Half");
+
+    // DHCP IP 대기 (최대 8초)
+    Serial.print("[ETH] Waiting for DHCP IP");
+    t = millis();
+    while (ETH.localIP() == IPAddress(0,0,0,0) && millis() - t < 8000) {
+        delay(200); Serial.print(".");
+    }
+    Serial.println();
+    if (ETH.localIP() == IPAddress(0,0,0,0)) {
+        Serial.println("[ETH] DHCP timeout.");
+        return false;
+    }
+    Serial.printf("[ETH] IP: %s\n", ETH.localIP().toString().c_str());
+    return true;
+}
+
+// ─────────────────────────────────────────────────────
 // LAN8720 테스트: ETH 초기화 → MDIO PHY ID 검증 → 링크 → GW ping
 //
 // 실행 순서:

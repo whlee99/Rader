@@ -122,6 +122,12 @@ class SetupViewModel(QObject):
         self._devices[mac] = snap
         self.device_list_updated.emit(list(self._devices.values()))
 
+    def clear_devices(self):
+        """감지된 장치 목록을 초기화한다."""
+        self._devices.clear()
+        self._latest_s1.clear()
+        self.device_list_updated.emit([])
+
     # ── Calibration 미리보기 ──────────────────────────────────────────────────
     def _emit_tilt_preview(self):
         """현재 config 매핑 기준으로 tilt_deg 계산 후 시그널 발행.

@@ -1,35 +1,33 @@
-1. minishell 이 부팅후 가장 먼저 실행 된다. 
+1. minishell
    prompt: RADER> 
 
    기능 : 
-   
-   3초 동안 Key 입력이 없으면 아무 입력이 없으면 main을 실행한다. 
+   네트워크 초기화(WiFi 또는 LAN8720) 후 실행된다.
+   3초 동안 Key 입력이 없으면 main을 실행한다.
 
     명령어 : 
 
     1) printenv 
-       env 내용을 보여준다. 
-    2) set mac
-       mac address 를 입력 받는다. 
-    3) set ip  
-       static ip를 입력 받는다. 
-    3) set gw 
-       static gw를 입력 받는다. 
-    4) set mask 
-       static subnet mask를 입력 받는다. 
-    5) set ipmode
-       0: Static, 1: DHCP 
-    6) set ssid 
-    7) set pwd 
-    8) set brockerip
-    9) test network 
+       env 내용과 DIP SW 모드를 보여준다. 
+    2) test network 
        239.255.3.4 multicast 로 env 내용을 udp 8096 포트로 송출한다. 
        192.168.0.20:8096 unicast 로도 동시 송출.
-   10) test led
-       M_LED_1 (IO14) / M_LED_2 (IO13) 동시 ON/OFF 3회 점멸.
-   11) test i2c
+    3) test led
+       Phase 1: M_LED_1/2/3 동시 ON/OFF 3회 (500ms 간격, active-LOW)
+       Phase 2: LED1 →2 →3 순서로 1초 간격 ON/OFF
+    4) test dipsw
+       DIP SW 현재 값 표시 (SW1=VN, SW0=VP, 0으로 읽힌 값 0~3)
+    5) test i2c
        VL53L5CX I2C 주소(0x29, 0x52) 감지. SDA/SCL 교체 조합 및
        100kHz / 50kHz / 10kHz 3단계 속도로 순차 탐색.
+    6) test lan8720
+       LAN8720 PHY ID(MDIO) 확인 + 링크 + GW ping
+    7) probe
+       DIP SW 모드, 센서 종류 표시
+    8) run
+       Shell 종료 → main 실행
+    9) reboot
+       ESP32 재시작
 
 
 2. IO Map 
@@ -78,16 +76,47 @@
    I2C 풀업:
      SDA, SCL 각각 2.2kΩ → 3.3V (외부 풀업, 30cm 배선 대응)
 
-2.3 LED
-   IO14 : M_LED_1 (외부 LED 1)
-   IO13 : M_LED_2 (외부 LED 2)
+2.3 LED (active-LOW: LOW=ON, HIGH=OFF)
+   IO13 : M_LED_1 (외부 LED 1)
+   IO33 : M_LED_2 (외부 LED 2)
+   IO14 : M_LED_3 (외부 LED 3, 빨간색) — 시스템 오류 표시
    - 부팅 3초 대기 중: M_LED_1 / M_LED_2 250ms 교대 점멸
-   - Shell 종료 / 타임아웃 후: 두 LED 모두 ON
+   - Shell 진입 후: 3개 LED 모두 ON
 
-2.4 Status LED
+   M_LED_3 (IO14) 오류 코드 표시 시나리오:
+   코드  이름            조건                         LED3 동작
+   ─────────────────────────────────────────────────────────────────
+   0     ERR_NONE         정상                         상시 ON
+   1     ERR_SENSOR_NONE  부팅 시 센서 미감지           1000ms 느린 점멸
+   2     ERR_WIFI_LOST    WiFi 연결 끊김               200ms 빠른 점멸
+   3     ERR_ETH_DOWN     LAN8720 링크 다운            200ms 빠른 점멸
+   4     ERR_DHCP_FAIL    DHCP IP 할당 실패            200ms 빠른 점멸
+   5     ERR_MQTT_FAIL    MQTT 브로커 연결 실패         200ms 빠른 점멸
+
+   우선순위: WIFI_LOST > ETH_DOWN > DHCP_FAIL > MQTT_FAIL > SENSOR_NONE
+   세부 원인은 shell 의 probe 명령어로 확인
+   loop() 매 반복 실시간 평가 → LED3 즉시 반영 (millis 기반 비블로킹)
+
+2.4 DIP Switch (Read-only)
+   VP (GPIO36) : DIP_SW0 (LSB)
+   VN (GPIO39) : DIP_SW1 (MSB)
+   - 외부 10kΩ Pull-up, SW ON(닫힌) → GND = LOW(0)
+
+   모드 테이블:
+   SW1  SW0  값  모드          SSID    Broker
+   ───────────────────────────────────────────────────────────────────
+   0    0    0   WiFi           TRDR    192.168.0.203
+   0    1    1   WiFi Dev       spdio   192.168.0.20
+   1    0    2   Reserved       —       LAN8720 (→ 11과 동일)
+   1    1    3   UTP / LAN8720  —       192.168.0.203
+   전체 DHCP, MQTT Broker 포트: 1883, Topic: RDR
+
+2.5 Status LED
    IO2  : 내장 LED (정상=점등, 오류=점멸)
+          MQTT 연결 시 ON, 끊김 또는 재연결 중 OFF
+          M_LED_3(빨간) 와 병행 사용 가능
 
-2.5 센서 자동 선택
+2.6 센서 자동 선택
    - 부팅 시 UART2(GPIO16) 에서 TFmini 프레임 감지 (500ms)
    - 감지 성공: TFmini Plus 모드
    - 감지 실패: VL53L5CX 모드 (I2C)
@@ -134,12 +163,14 @@
        wifi      : WiFi RSSI (dBm), 미연결 시 0
        ip        : 현재 IP 문자열
        free_heap : ESP.getFreeHeap() 반환값 (bytes)
-       err       : 0=정상, 1=센서오류, 2=WiFi끊김, 3=MQTT오류
+     err       : ErrorCode (0=정상, 1=센서미감지, 2=WiFi단절, 3=LAN링크다운, 4=DHCP실패, 5=MQTT실패)
 
-   3.3 미결정 사항
-   1. GPIO 핀 상태에 따라, TFmini Plus 또는 VL53L5CX 의 센서 값을 Publish 한다.
- 
-   2. GPIO 핀 으로 정상 상태 또는 ERROR 상태를 표시한다. 
+   3.3 확정 사항
+   1. DIP SW(IO36/IO39) 에 따라 TFmini Plus 또는 VL53L5CX 센서 값을 MQTT Publish 한다.
+      WiFi 모드 (00/01) 및 LAN8720 모드 (10/11) 모두 192.168.0.203:1883 에 전송한다.
+
+   2. M_LED_3 (IO14, 빨간) 로 오류 상태를 표시한다.
+      ErrorCode 0~5 를 millis() 기반 비블로킹 점멸로 표현 (2.3 참고). 
 
 
 4. LAN8720 연결
@@ -278,8 +309,8 @@
   IO2   OUT    Status LED        내장 LED                    정상=점등, 오류=점멸
   IO4   OUT    I2C SCL           VL53L5CX 보드 SCL           외부 2.2kΩ Pull-up → 3.3V
   IO5   I/O    I2C SDA             보드 SDA           외부 2.2kΩ Pull-up → 3.3V
-  IO13  OUT    M_LED_2           외부 LED 2                  3.3V 출력, 전류제한 저항 포함
-  IO14  OUT    M_LED_1           외부 LED 1                  3.3V 출력, 전류제한 저항 포함
+  IO13  OUT    M_LED_1           외부 LED 1                  active-LOW (LOW=ON)
+  IO14  OUT    M_LED_3           외부 LED 3                  active-LOW (LOW=ON)
   IO16  IN/OUT TFMini RX / VL53_RST  TFMini Plus TX / I2C_RST  TFMini 감지 실패 시 I2C_RST로 전환
   IO17  OUT    LAN8720 CLK (50MHz)   LAN8720 XTAL1/CLKIN    RMII 클럭 출력(ETH_CLOCK_GPIO17_OUT)
                                                               ※ UART2 TX 미사용 (TFMINI_TX_PIN=-1)
@@ -292,8 +323,10 @@
   IO26  IN     RMII RXD1         LAN8720 RXD1/MODE1         RMII 고정 핀, 10K Pull-up → 3.3V
   IO27  IN     RMII CRS_DV       LAN8720 CRS_DV/MODE2       RMII 고정 핀, 10K Pull-up → 3.3V
   IO32  OUT    LAN8720 nRST      LAN8720 nRST               active-LOW, 10K Pull-up, 캐패시터 금지
+  IO33  OUT    M_LED_2           외부 LED 2                  active-LOW (LOW=ON)
   IO34  IN     VL53 INT          VL53L5CX 보드 INT          현재 미사용 (폴링 방식), 입력전용 핀
-  IO35  IN     INTERFACE_SEL     점퍼 (GND / 3.3V)          LOW=WiFi, HIGH=LAN8720, 외부 10kΩ Pull-down 필수
+  IO36  IN     DIP_SW0 (LSB)     DIP SW 스위치 0            입력전용(VP), 10kΩ Pull-up, SW ON→GND
+  IO39  IN     DIP_SW1 (MSB)     DIP SW 스위치 1            입력전용(VN), 10kΩ Pull-up, SW ON→GND
 
 5.2 미사용 핀 (Reserved / NC)
 
@@ -303,9 +336,8 @@
   IO6~11  NC   내부 Flash SPI 연결 핀 — 절대 사용 금지
   IO12  NC      부트 시 HIGH 시 3.3V 레귤레이터 모드 변경 위험 — 사용 주의
   IO15  NC      부트 시 로그 출력 영향 — 사용 주의
-  IO33  NC      미할당
-  IO36  NC      입력전용 핀 (VP), 미할당
-  IO39  NC      입력전용 핀 (VN), 미할당
+  IO35  NC      리비전 후 미사용 (파이전 INTERFACE_SEL 핀, 입력전용)
+  IO38  NC      입력전용, 미할당
 
 5.3 전원 핀
 
@@ -329,25 +361,21 @@
   ※ 센터탭 저항 미장착 시: 10Mbps Half 로만 링크, DHCP 실패.
      장착 후 확인: 100Mbps Full-Duplex, DHCP 정상, Ping OK.
 
-5.6 INTERFACE_SEL 배선 (IO35)
+5.6 DIP SW 배선 (IO36/IO39)
 
-  IO35 는 입력전용 핀 (출력 불가). 내부 Pull-up/Pull-down 없음 → 외부 저항 필수.
+  VP(IO36) = DIP_SW0 (LSB),  VN(IO39) = DIP_SW1 (MSB)
+  입력전용 핀, 내부 Pull 없음 → 외부 10kΩ Pull-up 필수.
 
   배선:
-    IO35 ──── 10kΩ ──── GND          (기본 Pull-down)
-    점퍼 단락 시: IO35 ──── 3.3V     (HIGH = LAN8720 모드)
+    IO36 ──── 10kΩ ──── 3.3V     (Pull-up)
+    DIP SW ON(닫힌) 시: IO36 ──── GND    (LOW = 0)
+    (IO39 동일 구조)
 
   동작:
-    점퍼 없음 (Open) : IO35 = LOW  → WiFi 모드
-    점퍼 단락        : IO35 = HIGH → LAN8720 모드
+    SW ON(닫힌) : 0  /  SW OFF(열림) : 1
+    모드 = (SW1 << 1) | SW0
 
-  코드:
-    #define INTERFACE_SEL_PIN  35
-    // setup() 내:
-    bool useLAN = digitalRead(INTERFACE_SEL_PIN);  // HIGH=LAN8720, LOW=WiFi
-
-  ※ 플로팅 금지: 10kΩ Pull-down 미장착 시 부팅마다 불확정 동작.
-  ※ IO35 는 출력 설정(pinMode OUTPUT) 불가 — 입력 전용.
+  미연결 금지: 10kΩ Pull-up 미장착 시 플로팅 → 부팅마다 모드 불확정.
 
 
 5.5 센서 자동 선택 로직 (부팅 시)

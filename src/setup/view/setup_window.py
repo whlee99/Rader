@@ -1,21 +1,21 @@
 """
 src/setup/view/setup_window.py
-Setup UI 메인 윈도우 — 4개 탭 구성.
+Setup UI 메인 윈도우 — 3개 탭 구성.
 
 탭 1: 브로커 연결 & 장치 감지
-탭 2: 장치 위치 매핑  (MAC 나열 → 위치 드롭다운 선택)
-탭 3: Calibration
-탭 4: Config 저장 & SSH Push
+탭 2: 장치현장구성 (장치 위치 매핑 + Calibration + 즉시 전송)
+탭 3: 설정 보기 (전송된 config JSON 표시)
 """
 
 from PySide6.QtWidgets import (
     QMainWindow, QWidget,
-    QVBoxLayout, QHBoxLayout, QGridLayout, QFormLayout,
+    QVBoxLayout, QHBoxLayout, QFormLayout,
     QTabWidget, QGroupBox,
     QLabel, QLineEdit, QPushButton,
     QTableWidget, QTableWidgetItem, QHeaderView,
     QComboBox, QSpinBox, QDoubleSpinBox,
-    QTextEdit, QSplitter, QFileDialog,
+    QTextEdit,
+    QScrollArea, QFrame,
 )
 from PySide6.QtGui import QFont
 from PySide6.QtCore import Qt, Slot
@@ -79,11 +79,9 @@ class SetupWindow(QMainWindow):
         self._tabs = QTabWidget()
         root.addWidget(self._tabs)
 
-        self._tabs.addTab(self._tab_connection(),  "① 브로커 연결")
-        self._tabs.addTab(self._tab_mapping(),     "② 장치 매핑")
-        self._tabs.addTab(self._tab_calibration(), "③ Calibration")
-        self._tabs.addTab(self._tab_local_save(),  "④ 로컬 저장")
-        self._tabs.addTab(self._tab_mqtt_publish(), "⑤ RPi4에 전송")
+        self._tabs.addTab(self._tab_connection(),   "① 브로커 연결")
+        self._tabs.addTab(self._tab_field_config(), "② 장치현장구성")
+        self._tabs.addTab(self._tab_config_view(),  "③ 설정 보기")
 
     # ── 탭 1: 브로커 연결 ─────────────────────────────────────────────────────
     def _tab_connection(self) -> QWidget:
@@ -137,6 +135,11 @@ class SetupWindow(QMainWindow):
         self.device_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.device_table.setEditTriggers(QTableWidget.NoEditTriggers)
         dev_lay.addWidget(self.device_table)
+
+        clr_dev_btn = QPushButton("목록 지우기")
+        clr_dev_btn.setFixedWidth(90)
+        clr_dev_btn.clicked.connect(self._vm.clear_devices)
+        dev_lay.addWidget(clr_dev_btn, alignment=Qt.AlignRight)
         lay.addWidget(dev_box, stretch=1)
 
         # 로그
@@ -155,12 +158,18 @@ class SetupWindow(QMainWindow):
 
         return w
 
-    # ── 탭 2: 장치 위치 매핑 ──────────────────────────────────────────────────
-    def _tab_mapping(self) -> QWidget:
+    # ── 탭 2: 장치현장구성 (매핑 + Calibration) ────────────────────────────────
+    def _tab_field_config(self) -> QWidget:
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+
         w   = QWidget()
         lay = QVBoxLayout(w)
         lay.setSpacing(8)
+        lay.setContentsMargins(4, 4, 4, 4)
 
+        # ─ 장치 매핑 ─────────────────────────────────────────────────────────
         info = QLabel(
             "수신된 MAC 별로 물리 위치를 지정하세요.  "
             "S1: ESP32 1대 = TFmini 1개, 역할(L/R) 지정  |  "
@@ -187,28 +196,25 @@ class SetupWindow(QMainWindow):
         s2_box = QGroupBox("S2 장치 매핑 (VL53L5CX)")
         s2_lay = QVBoxLayout(s2_box)
 
-        self.s2_table = QTableWidget(0, 4)
-        self.s2_table.setHorizontalHeaderLabels(["MAC 주소", "물리 위치", "활성 센서 수", "마지막 수신"])
+        self.s2_table = QTableWidget(0, 3)
+        self.s2_table.setHorizontalHeaderLabels(["MAC 주소", "물리 위치", "마지막 수신"])
         self.s2_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.s2_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
+        self.s2_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
         self.s2_table.setEditTriggers(QTableWidget.NoEditTriggers)
         s2_lay.addWidget(self.s2_table)
         lay.addWidget(s2_box, stretch=1)
 
-        # 저장 버튼
-        save_btn = QPushButton("매핑 적용 (메모리에 저장)")
-        save_btn.clicked.connect(self._on_apply_mapping)
-        lay.addWidget(save_btn, alignment=Qt.AlignRight)
+        # 구분선
+        sep = QFrame()
+        sep.setFrameShape(QFrame.HLine)
+        sep.setStyleSheet("color:#555;")
+        lay.addWidget(sep)
 
-        return w
+        # ─ Calibration 파라미터 (좌) ↔ 기울기 미리보기 (우) ─────────────────
+        mid_row = QHBoxLayout()
+        mid_row.setSpacing(8)
 
-    # ── 탭 3: Calibration ─────────────────────────────────────────────────────
-    def _tab_calibration(self) -> QWidget:
-        w   = QWidget()
-        lay = QVBoxLayout(w)
-        lay.setSpacing(8)
-
-        # 파라미터
+        # 왼쪽: Calibration 파라미터
         param_box = QGroupBox("Calibration 파라미터")
         form      = QFormLayout(param_box)
         form.setRowWrapPolicy(QFormLayout.DontWrapRows)
@@ -221,7 +227,7 @@ class SetupWindow(QMainWindow):
         self.gap_spin.setSuffix(" m")
         self.gap_spin.setValue(0.5)
         self.gap_spin.setToolTip("S1-L 과 S1-R 센서 사이의 물리적 거리 (미터)")
-        form.addRow("sensor_gap  (S1-L/R 사이 거리, 단위: m) :", self.gap_spin)
+        form.addRow("sensor_gap  (S1-L/R 사이 거리, m) :", self.gap_spin)
 
         self.tilt_limit_spin = QDoubleSpinBox()
         self.tilt_limit_spin.setRange(0.1, 90.0)
@@ -236,13 +242,13 @@ class SetupWindow(QMainWindow):
         self.threshold_spin.setSingleStep(5)
         self.threshold_spin.setSuffix(" cm")
         self.threshold_spin.setValue(30)
-        self.threshold_spin.setToolTip("S2 장애물 경보 발생 기준 거리 (쯀티미터)")
-        form.addRow("threshold  (장애물 경보 거리, 단위: cm) :", self.threshold_spin)
+        self.threshold_spin.setToolTip("S2 장애물 경보 발생 기준 거리 (센티미터)")
+        form.addRow("threshold  (장애물 경보 거리, cm) :", self.threshold_spin)
 
-        lay.addWidget(param_box)
+        mid_row.addWidget(param_box, stretch=1)
 
-        # 기울기 실시간 미리보기
-        tilt_box = QGroupBox("기울기 실시간 미리보기 (탭 1에서 수신 중이어야 동작)")
+        # 오른쪽: 기울기 실시간 미리보기
+        tilt_box = QGroupBox("기울기 실시간 미리보기 (탭①에서 수신 중이어야 동작)")
         tilt_lay = QVBoxLayout(tilt_box)
 
         vals_row = QHBoxLayout()
@@ -264,103 +270,40 @@ class SetupWindow(QMainWindow):
         baseline_btn = QPushButton("현재 상태를 수평 기준으로 저장 (Baseline 캡처)")
         baseline_btn.clicked.connect(self._on_capture_baseline)
         tilt_lay.addWidget(baseline_btn)
-        lay.addWidget(tilt_box)
+        tilt_lay.addStretch()
 
-        # 파라미터 적용 버튼
-        apply_btn = QPushButton("파라미터 적용")
-        apply_btn.setToolTip("목록에만 저장됩니다.  파일 저장은 탭 4 "\
-                             "[로컈 저장]에서 하세요.")
-        apply_btn.clicked.connect(self._on_apply_calib)
-        lay.addWidget(apply_btn, alignment=Qt.AlignRight)
-        lay.addStretch()
+        mid_row.addWidget(tilt_box, stretch=1)
+        lay.addLayout(mid_row)
 
-        return w
+        # ─ Apply 버튼 & 전송 상태 ─────────────────────────────────────────────
+        btn_row = QHBoxLayout()
+        self.apply_status_lbl = QLabel("")
+        self.apply_status_lbl.setWordWrap(True)
+        btn_row.addWidget(self.apply_status_lbl, stretch=1)
 
-    # ── 탭 4: 저장 / Push ─────────────────────────────────────────────────────
-    # ── 탭 4: 로컬 저장 ──────────────────────────────────────────────────────
-    def _tab_local_save(self) -> QWidget:
+        apply_btn = QPushButton("▶  Apply  —  매핑 & 파라미터 적용 후 즉시 전송")
+        apply_btn.setObjectName("pushBtn")
+        apply_btn.setFixedHeight(32)
+        apply_btn.clicked.connect(self._on_apply_all)
+        btn_row.addWidget(apply_btn)
+        lay.addLayout(btn_row)
+
+        scroll.setWidget(w)
+        return scroll
+
+    # ── 탭 3: 설정 보기 ──────────────────────────────────────────────────────
+    def _tab_config_view(self) -> QWidget:
         w   = QWidget()
         lay = QVBoxLayout(w)
         lay.setSpacing(8)
 
-        # Config 미리보기
-        preview_box = QGroupBox("Config JSON 미리보기")
-        preview_lay = QVBoxLayout(preview_box)
+        view_box = QGroupBox("전송된 Config JSON")
+        view_lay = QVBoxLayout(view_box)
         self.config_preview = QTextEdit()
         self.config_preview.setReadOnly(True)
         self.config_preview.setFont(QFont("Consolas", 9))
-        preview_lay.addWidget(self.config_preview)
-
-        refresh_btn = QPushButton("미리보기 갱신")
-        refresh_btn.setFixedWidth(110)
-        refresh_btn.clicked.connect(self._on_refresh_preview)
-        preview_lay.addWidget(refresh_btn, alignment=Qt.AlignRight)
-        lay.addWidget(preview_box, stretch=1)
-
-        # 저장 경로 선택
-        save_box = QGroupBox("로컬 파일 저장  (한글 경로 지원)")
-        save_lay = QVBoxLayout(save_box)
-
-        path_row = QHBoxLayout()
-        path_row.addWidget(QLabel("저장 경로 :"))
-        self.save_path_edit = QLineEdit()
-        self.save_path_edit.setPlaceholderText("파일 선택 버튼 이용 또는 직접 입력")
-        path_row.addWidget(self.save_path_edit, stretch=1)
-        browse_btn = QPushButton("파일 선택...")
-        browse_btn.setFixedWidth(100)
-        browse_btn.clicked.connect(self._on_browse_save_path)
-        path_row.addWidget(browse_btn)
-        save_lay.addLayout(path_row)
-
-        self.local_save_status_lbl = QLabel("")
-        self.local_save_status_lbl.setStyleSheet("font-size:11px;")
-        save_lay.addWidget(self.local_save_status_lbl)
-
-        save_btn = QPushButton("선택한 경로에 저장")
-        save_btn.setObjectName("startBtn")
-        save_btn.clicked.connect(self._on_save_local_file)
-        save_lay.addWidget(save_btn, alignment=Qt.AlignRight)
-        lay.addWidget(save_box)
-
-        return w
-
-    # ── 탭 5: MQTT Publish ────────────────────────────────────────────────────
-    def _tab_mqtt_publish(self) -> QWidget:
-        w   = QWidget()
-        lay = QVBoxLayout(w)
-        lay.setSpacing(8)
-
-        info = QLabel(
-            "config JSON 을 MQTT 'RDR/config' 토픽에 retain=True 로 publish 합니다.\n"
-            "RPi4 Monitor 앱이 해당 토픽을 구독하면 자동으로 수신에 로컬 저장합니다.\n"
-            "· 브로커에 접속된 상태에서만 동작합니다 (탭① 연결 필수).\n"
-            "· SSH/SCP 및 별도 인증 정보 불필요."
-        )
-        info.setWordWrap(True)
-        info.setStyleSheet("color:#aaa; font-size:11px;")
-        lay.addWidget(info)
-
-        pub_box = QGroupBox("MQTT config 배포")
-        pub_lay = QVBoxLayout(pub_box)
-
-        topic_row = QHBoxLayout()
-        topic_row.addWidget(QLabel("TOPIC :"))
-        topic_lbl = QLabel("RDR/config  (retain=True, QoS=1)")
-        topic_lbl.setStyleSheet("color:#4fc3f7; font-weight:bold;")
-        topic_row.addWidget(topic_lbl)
-        topic_row.addStretch()
-        pub_lay.addLayout(topic_row)
-
-        self.publish_status_lbl = QLabel("")
-        self.publish_status_lbl.setWordWrap(True)
-        pub_lay.addWidget(self.publish_status_lbl)
-
-        publish_btn = QPushButton("config Publish → RPi4 Monitor")
-        publish_btn.setObjectName("pushBtn")
-        publish_btn.clicked.connect(self._on_mqtt_publish)
-        pub_lay.addWidget(publish_btn, alignment=Qt.AlignRight)
-        lay.addWidget(pub_box)
-        lay.addStretch()
+        view_lay.addWidget(self.config_preview)
+        lay.addWidget(view_box, stretch=1)
 
         return w
 
@@ -446,21 +389,15 @@ class SetupWindow(QMainWindow):
             self.s2_table.setRowCount(len(snaps))
             for row, snap in enumerate(snaps):
                 dev    = cfg.get_device(snap.mac)
-                s2_lbl = dev.s2[0]    if dev and dev.s2    else ""
-                act    = dev.active_s2 if dev               else 1
+                s2_lbl = dev.s2[0] if dev and dev.s2 else ""
 
                 self.s2_table.setItem(row, 0, QTableWidgetItem(snap.mac))
                 cb = self._make_combo(S2_POSITION_OPTIONS, s2_lbl)
                 self.s2_table.setCellWidget(row, 1, cb)
-
-                spin = QSpinBox()
-                spin.setRange(1, 10)
-                spin.setValue(act)
-                self.s2_table.setCellWidget(row, 2, spin)
-                self.s2_table.setItem(row, 3, QTableWidgetItem(snap.last_seen))
+                self.s2_table.setItem(row, 2, QTableWidgetItem(snap.last_seen))
         else:
             for row, snap in enumerate(snaps):
-                self.s2_table.setItem(row, 3, QTableWidgetItem(snap.last_seen))
+                self.s2_table.setItem(row, 2, QTableWidgetItem(snap.last_seen))
 
     @staticmethod
     def _make_combo(options: list, current: str) -> QComboBox:
@@ -472,29 +409,39 @@ class SetupWindow(QMainWindow):
 
     @Slot()
     def _on_apply_mapping(self):
-        """탭 2 테이블의 현재 값을 ViewModel 에 저장"""
-        # S1
+        """S1/S2 테이블의 현재 값을 ViewModel 에 저장 (내부 헬퍼)"""
         for row in range(self.s1_table.rowCount()):
-            mac = self.s1_table.item(row, 0).text()
-            cb  = self.s1_table.cellWidget(row, 1)
+            mac    = self.s1_table.item(row, 0).text()
+            cb     = self.s1_table.cellWidget(row, 1)
             s1_val = cb.currentText() if cb else ""
-            s1_role = "" if s1_val == "(unset)" else s1_val
-            self._vm.update_device_mapping(mac, "S1", s1_role=s1_role)
+            self._vm.update_device_mapping(mac, "S1",
+                                            s1_role="" if s1_val == "(unset)" else s1_val)
 
-        # S2
         for row in range(self.s2_table.rowCount()):
             mac  = self.s2_table.item(row, 0).text()
             cb   = self.s2_table.cellWidget(row, 1)
-            spin = self.s2_table.cellWidget(row, 2)
             lbl  = cb.currentText() if cb else ""
-            act  = spin.value()     if spin else 1
-            s2_labels = ["" if lbl == "(unset)" else lbl]
             self._vm.update_device_mapping(mac, "S2",
-                                            s2_labels=s2_labels,
-                                            active_s2=act)
+                                            s2_labels=["" if lbl == "(unset)" else lbl],
+                                            active_s2=64)
 
-        self._append_log("매핑 적용 완료")
-        self._on_refresh_preview()
+    @Slot()
+    def _on_apply_all(self):
+        """매핑 + Calibration 파라미터를 적용하고 즉시 MQTT 전송."""
+        # 1. 매핑 적용
+        self._on_apply_mapping()
+
+        # 2. Calibration 파라미터 적용
+        self._vm.update_calib_params(
+            sensor_gap_cm  = self.gap_spin.value() * 100,       # m → cm
+            tilt_limit_deg = self.tilt_limit_spin.value(),
+            threshold_mm   = self.threshold_spin.value() * 10,  # cm → mm
+        )
+
+        # 3. 즉시 전송
+        self.apply_status_lbl.setText("전송 중…")
+        self.apply_status_lbl.setStyleSheet("color:#FFC107;")
+        self._vm.mqtt_publish_config()
 
     @Slot(float, int, int)
     def _on_tilt_preview(self, tilt_deg: float, left_cm: int, right_cm: int):
@@ -508,61 +455,14 @@ class SetupWindow(QMainWindow):
     def _on_capture_baseline(self):
         self._vm.capture_baseline()
 
-    @Slot()
-    def _on_apply_calib(self):
-        self._vm.update_calib_params(
-            sensor_gap_cm  = self.gap_spin.value() * 100,      # m → cm 변환
-            tilt_limit_deg = self.tilt_limit_spin.value(),
-            threshold_mm   = self.threshold_spin.value() * 10, # cm → mm 변환
-        )
-        self._append_log("Calibration 파라미터 적용 완료")
-
-    @Slot()
-    def _on_refresh_preview(self):
-        self.config_preview.setPlainText(self._vm.get_config().to_json())
-
-    @Slot()
-    def _on_browse_save_path(self):
-        """QFileDialog — 한글 경로 포함 원시 문자열 반환 (nativeDialog 사용)"""
-        path, _ = QFileDialog.getSaveFileName(
-            self,
-            "저장 파일 선택",
-            self.save_path_edit.text() or "rader_config.json",
-            "JSON 파일 (*.json);;All Files (*)",
-        )
-        if path:
-            self.save_path_edit.setText(path)
-
-    @Slot()
-    def _on_save_local_file(self):
-        path = self.save_path_edit.text().strip()
-        if not path:
-            self.local_save_status_lbl.setText("⚠ 저장 경로를 지정하세요.")
-            self.local_save_status_lbl.setStyleSheet("color:#FFC107;")
-            return
-        ok, msg = self._vm.save_config_to_path(path)
-        if ok:
-            self.local_save_status_lbl.setText(f"✓ {msg}")
-            self.local_save_status_lbl.setStyleSheet("color:#4caf50;")
-        else:
-            self.local_save_status_lbl.setText(f"✗ {msg}")
-            self.local_save_status_lbl.setStyleSheet("color:#f44336;")
-        self._append_log(msg)
-
-    @Slot()
-    def _on_mqtt_publish(self):
-        self.publish_status_lbl.setText("전송 중...")
-        self.publish_status_lbl.setStyleSheet("color:#FFC107;")
-        self._vm.mqtt_publish_config()
-
     @Slot(bool, str)
     def _on_publish_result(self, ok: bool, msg: str):
         if ok:
-            self.publish_status_lbl.setText(f"✓ {msg}")
-            self.publish_status_lbl.setStyleSheet("color:#4caf50;")
+            self.apply_status_lbl.setText(f"✓ {msg}")
+            self.apply_status_lbl.setStyleSheet("color:#4caf50;")
         else:
-            self.publish_status_lbl.setText(f"✗ {msg}")
-            self.publish_status_lbl.setStyleSheet("color:#f44336;")
+            self.apply_status_lbl.setText(f"✗ {msg}")
+            self.apply_status_lbl.setStyleSheet("color:#f44336;")
         self._append_log(msg)
 
     def _append_log(self, msg: str):
