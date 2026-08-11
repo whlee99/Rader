@@ -200,6 +200,8 @@ void shell_run(Env &e, int netMode, SensorMode sensorMode) {
             Serial.println("─────────────────────────────────");
             Serial.printf("  dipsw    : SW1(VN)=%d  SW0(VP)=%d  ->  Mode %d%d: %s\n",
                           sw1, sw0, sw1, sw0, modeNames[netMode]);
+            Serial.printf("  fw       : git#%s  (built " __DATE__ " " __TIME__ ")\n",
+                          GIT_HASH);
             Serial.println("─────────────────────────────────");
 
         } else if (cmd == "probe") {
