@@ -127,10 +127,10 @@ void shell_run(Env &e, int netMode, SensorMode sensorMode) {
     Serial.println("================================");
     Serial.printf("Press any key within %d sec...\n", SHELL_TIMEOUT_MS / 1000);
 
-    // 3초 타임아웃 (대기 중 M_LED_1 / M_LED_2 교대 점멸, active-LOW)
+    // 3초 타임아웃 (대기 중 M_LED_1 / M_LED_2 / M_LED_3 교대 점멸, active-LOW)
     unsigned long deadline    = millis() + SHELL_TIMEOUT_MS;
     unsigned long ledToggleMs = millis();
-    bool ledState = false;   // false: LED1=ON(LOW), LED2=OFF(HIGH)
+    bool ledState = false;   // false: LED1=ON, LED2/3=OFF
     digitalWrite(PIN_M_LED_1, LOW);   // LED1 ON
     digitalWrite(PIN_M_LED_2, HIGH);  // LED2 OFF
     digitalWrite(PIN_M_LED_3, HIGH);  // LED3 OFF
@@ -146,15 +146,17 @@ void shell_run(Env &e, int netMode, SensorMode sensorMode) {
             ledToggleMs = millis();
             ledState = !ledState;
             // active-LOW: LOW=ON, HIGH=OFF
+            // LED1 vs LED2+LED3 교대
             digitalWrite(PIN_M_LED_1, ledState ? HIGH : LOW);
             digitalWrite(PIN_M_LED_2, ledState ? LOW  : HIGH);
+            digitalWrite(PIN_M_LED_3, ledState ? LOW  : HIGH);
         }
     }
 
-    // Shell 종료 시 3개 LED 모두 ON (active-LOW)
+    // Shell 종료 시 LED1/2 ON, LED3는 ErrorCode 제어로 넘김 (OFF 상태 유지)
     digitalWrite(PIN_M_LED_1, LOW);
     digitalWrite(PIN_M_LED_2, LOW);
-    digitalWrite(PIN_M_LED_3, LOW);
+    // LED3: setup()의 evalError() 및 loop()에서 제어
 
     if (!entered) {
         Serial.println("[SHELL] Timeout → starting main.\n");

@@ -59,7 +59,7 @@ static void hw_init() {
     pinMode(PIN_M_LED_3, OUTPUT);
     digitalWrite(PIN_M_LED_1, HIGH);  // active-LOW: HIGH=OFF
     digitalWrite(PIN_M_LED_2, HIGH);
-    digitalWrite(PIN_M_LED_3, HIGH);
+    digitalWrite(PIN_M_LED_3, LOW);   // LED3: 부팅 시작부터 ON
 
     // ── DIP Switch (입력전용) ─────────────────────────
     pinMode(PIN_DIP_SW0, INPUT);
