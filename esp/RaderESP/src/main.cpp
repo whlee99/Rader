@@ -13,7 +13,9 @@ static Env  g_env;
 static SensorMode g_sensor  = SENSOR_NONE;  // 3-state: TFMINI / VL53 / NONE
 static int        g_netMode = NET_WIFI;     // NetworkMode: DIP SW 기반
 static ErrorCode  g_error   = ERR_NONE;    // 현재 오류 코드
-static unsigned long lastPublishMs = 0;
+static unsigned long lastPublishMs   = 0;
+static unsigned long lastMqttRetryMs = 0;
+#define MQTT_RETRY_INTERVAL_MS 8000  // MQTT 재연결 시도 간격
 
 // 오류 코드 실시간 평가 — loop()와 probe 양쪽에서 사용
 static ErrorCode evalError(SensorMode sensor, int netMode) {
@@ -167,7 +169,11 @@ void loop() {
     if (netReady) {
         if (!net_mqtt_connected()) {
             setStatusLed(false);
-            net_mqtt_reconnect(g_env);
+            unsigned long now = millis();
+            if (now - lastMqttRetryMs >= MQTT_RETRY_INTERVAL_MS) {
+                lastMqttRetryMs = now;
+                net_mqtt_reconnect(g_env);
+            }
         } else {
             setStatusLed(true);
         }
