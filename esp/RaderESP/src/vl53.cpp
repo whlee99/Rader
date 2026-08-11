@@ -57,17 +57,17 @@ void vl53_begin() {
             Wire.beginTransmission(addr);
             uint8_t err = Wire.endTransmission();
             if (err == 0) {
-                Serial.printf("[I2C]   Swapped: Found device at 0x%02X  ← SDA/SCL 가 바뀌어 있었음!\n", addr);
+                Serial.printf("[I2C]   Swapped: Found device at 0x%02X  <- SDA/SCL were swapped!\n", addr);
                 found++;
             }
         }
         if (found == 0) {
             Serial.println("[I2C]   Still nothing.");
-            Serial.println("[I2C]   체크리스트:");
-            Serial.println("[I2C]     1. VIN 5V 실제 전압 멀티미터 확인");
-            Serial.println("[I2C]     2. SDA(GPIO5)/SCL(GPIO4) 물리 배선 재확인");
-            Serial.println("[I2C]     3. RST(GPIO16) 직접 3.3V 연결 후 테스트");
-            Serial.println("[I2C]     4. 브레이크아웃 보드 불량 가능성");
+            Serial.println("[I2C]   Checklist:");
+            Serial.println("[I2C]     1. Verify VIN=5V with multimeter");
+            Serial.println("[I2C]     2. Check SDA(GPIO5)/SCL(GPIO4) physical wiring");
+            Serial.println("[I2C]     3. Connect RST(GPIO16) directly to 3.3V and retry");
+            Serial.println("[I2C]     4. Possible breakout board defect");
             return;
         }
     }

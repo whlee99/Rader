@@ -5,6 +5,7 @@
 #include <Wire.h>
 #include <WiFi.h>
 #include <ETH.h>
+#include <ESP32Ping.h>
 
 // ─────────────────────────────────────────────────────
 // 히스토리 (최대 10개)
@@ -106,16 +107,16 @@ static String readLine() {
 
 static void printHelp() {
     Serial.println();
-    Serial.println("  printenv          env 전체 출력");
-    Serial.println("  test network      UDP Multicast 로 env 송출");
-    Serial.println("  test i2c          VL53L5CX I2C 주소(0x29/0x52) 감지, SDA/SCL 교체 포함");
-    Serial.println("  test lan8720      LAN8720 PHY ID(MDIO) + 링크 확인 + GW ping");
-    Serial.println("  test led          M_LED_1/2/3 동시 토글(3회) → 1→2→3 순차 점등");
-    Serial.println("  test dipsw        DIP SW 현재 값 표시 (0~3, SW0=LSB)");
-    Serial.println("  probe             현재 IO/모드 상태 표시");
-    Serial.println("  run               Shell 종료 → main 실행");
-    Serial.println("  reboot            ESP32 재시작");
-    Serial.println("  help              이 도움말");
+    Serial.println("  printenv          print all env variables");
+    Serial.println("  test network      send env via UDP multicast/unicast");
+    Serial.println("  test i2c          scan VL53L5CX I2C addr (0x29/0x52), incl. SDA/SCL swap");
+    Serial.println("  test lan8720      LAN8720 PHY ID (MDIO) + link check + GW ping");
+    Serial.println("  test led          toggle M_LED_1/2/3 x3, then 1->2->3 sequential");
+    Serial.println("  test dipsw        show current DIP SW value (0~3, SW0=LSB)");
+    Serial.println("  probe             show current IO / mode status");
+    Serial.println("  run               exit shell -> start main");
+    Serial.println("  reboot            restart ESP32");
+    Serial.println("  help              show this help");
 }
 
 // ─────────────────────────────────────────────────────
@@ -193,67 +194,111 @@ void shell_run(Env &e, int netMode, SensorMode sensorMode) {
             const char* modeNames[] = {
                 "WiFi        (SSID=TRDR,  Broker=192.168.0.203)",
                 "WiFi-Dev    (SSID=spdio, Broker=192.168.0.20)",
-                "LAN8720 RSV (10 → 11과 동일)",
+                "LAN8720 RSV (10 -> same as 11)",
                 "LAN8720 UTP"
             };
             Serial.println("─────────────────────────────────");
-            Serial.printf("  dipsw    : SW1(VN)=%d  SW0(VP)=%d  →  Mode %d%d: %s\n",
+            Serial.printf("  dipsw    : SW1(VN)=%d  SW0(VP)=%d  ->  Mode %d%d: %s\n",
                           sw1, sw0, sw1, sw0, modeNames[netMode]);
             Serial.println("─────────────────────────────────");
 
         } else if (cmd == "probe") {
-            const char* modeStr;
-            switch (netMode) {
-                case NET_WIFI:     modeStr = "WiFi        (SSID=TRDR,  Broker=192.168.0.203)"; break;
-                case NET_WIFI_DEV: modeStr = "WiFi-Dev    (SSID=spdio, Broker=192.168.0.20)";  break;
-                case NET_LAN_RSV:  modeStr = "LAN8720 RSV (10 → 11과 동일)";                   break;
-                case NET_LAN:      modeStr = "LAN8720     (UTP)";                              break;
-                default:           modeStr = "UNKNOWN";                                       break;
-            }
-            int sw0 = digitalRead(PIN_DIP_SW0);
-            int sw1 = digitalRead(PIN_DIP_SW1);
-            Serial.println("[PROBE] ── 선택된 인터페이스 / 센서 ─────────────────────────");
-            Serial.printf("[PROBE] DIP SW   : SW1(VN)=%d SW0(VP)=%d → Mode=%d%d: %s\n",
-                          sw1, sw0, sw1, sw0, modeStr);
-            // 오류 코드 실시간 평가
-            ErrorCode errCode = ERR_NONE;
-            if (netMode < 2) {
-                if (WiFi.status() != WL_CONNECTED)           errCode = ERR_WIFI_LOST;
-                else if (WiFi.localIP() == IPAddress(0,0,0,0)) errCode = ERR_DHCP_FAIL;
-                else if (!net_mqtt_connected())              errCode = ERR_MQTT_FAIL;
-            } else {
-                if (!ETH.linkUp())                           errCode = ERR_ETH_DOWN;
-                else if (ETH.localIP() == IPAddress(0,0,0,0)) errCode = ERR_DHCP_FAIL;
-                else if (!net_mqtt_connected())              errCode = ERR_MQTT_FAIL;
-            }
-            if (errCode == ERR_NONE && sensorMode == SENSOR_NONE)
-                errCode = ERR_SENSOR_NONE;
+            // ── Section 1: IO 핀 현재 상태 ──────────────────────────
+            int sw0  = digitalRead(PIN_DIP_SW0);
+            int sw1  = digitalRead(PIN_DIP_SW1);
+            int led1 = digitalRead(PIN_M_LED_1);   // active-LOW: LOW=ON
+            int led2 = digitalRead(PIN_M_LED_2);
+            int led3 = digitalRead(PIN_M_LED_3);
+            int stat = digitalRead(PIN_STATUS_LED);
+            int vint = digitalRead(PIN_VL53_INT);
+            int vrst = digitalRead(PIN_VL53_RST);
+            #define LEDSTR(v) ((v)==LOW ? "ON " : "OFF")
+            Serial.println("[PROBE] ── IO Pin Status ──────────────────────────────────");
+            Serial.printf("[PROBE] DIP SW   : SW1(VN/IO39)=%d  SW0(VP/IO36)=%d\n", sw1, sw0);
+            Serial.printf("[PROBE] LED      : LED1(IO13)=%s  LED2(IO33)=%s  LED3(IO14)=%s\n",
+                          LEDSTR(led1), LEDSTR(led2), LEDSTR(led3));
+            Serial.printf("[PROBE] StatusLED: IO2=%s\n", stat ? "ON" : "OFF");
+            Serial.printf("[PROBE] VL53 INT : IO34=%d\n", vint);
+            Serial.printf("[PROBE] VL53 RST : IO16=%d  (shared with TFMini RX)\n", vrst);
+            Serial.printf("[PROBE] I2C      : SDA=IO%d  SCL=IO%d  50kHz\n",
+                          PIN_VL53_SDA, PIN_VL53_SCL);
 
-            struct { const char *name; const char *desc; const char *led; } errInfo[] = {
-                {"NONE(0)",        "정상",                    "상시 ON"},
-                {"SENSOR_NONE(1)", "부팅 시 센서 미감지",    "1000ms 느린 점멸"},
-                {"WIFI_LOST(2)",   "WiFi 연결 끝김",       " 200ms 빠른 점멸"},
-                {"ETH_DOWN(3)",    "LAN8720 링크 다운",    " 200ms 빠른 점멸"},
-                {"DHCP_FAIL(4)",   "DHCP IP 할당 실패",     " 200ms 빠른 점멸"},
-                {"MQTT_FAIL(5)",   "MQTT 브로커 연결 실패", " 200ms 빠른 점멸"},
-            };
-            Serial.printf("[PROBE] Error    : %s  |  %s  |  LED3=%s\n",
-                          errInfo[errCode].name,
-                          errInfo[errCode].desc,
-                          errInfo[errCode].led);
-            const char *sensorStr;
-            switch (sensorMode) {
-                case SENSOR_TFMINI: sensorStr = "TFmini Plus  (UART2 GPIO16)";             break;
-                case SENSOR_VL53:   sensorStr = "VL53L5CX     (I2C SDA=GPIO5 SCL=GPIO4)"; break;
-                case SENSOR_NONE:   sensorStr = "NONE         (센서 미감지 — 배선 확인 필요)"; break;
-                default:            sensorStr = "UNKNOWN"; break;
+            // ── Section 2: Mode config info
+            const char* modeStr;
+            const char* brokerStr;
+            switch (netMode) {
+                case NET_WIFI:     modeStr = "WiFi        (SSID=TRDR)";  brokerStr = NET00_BROKER; break;
+                case NET_WIFI_DEV: modeStr = "WiFi-Dev    (SSID=spdio)"; brokerStr = NET01_BROKER; break;
+                case NET_LAN_RSV:  modeStr = "LAN8720 RSV (10)";          brokerStr = NET00_BROKER; break;
+                case NET_LAN:      modeStr = "LAN8720     (11)";          brokerStr = NET00_BROKER; break;
+                default:           modeStr = "UNKNOWN"; brokerStr = "-"; break;
             }
-            Serial.printf("[PROBE] Sensor   : %s\n", sensorStr);
+            Serial.println("[PROBE] ── Mode Config Info ─────────────────────────────");
+            Serial.printf("[PROBE] Net Mode : %d%d = %s\n", sw1, sw0, modeStr);
+
+            if (netMode < 2) {
+                // WiFi mode
+                bool wifiOk = (WiFi.status() == WL_CONNECTED);
+                Serial.printf("[PROBE] WiFi     : %s",  wifiOk ? "CONNECTED" : "DISCONNECTED");
+                if (wifiOk) {
+                    Serial.printf("  |  SSID=%s  |  IP=%s  |  RSSI=%ddBm",
+                                  WiFi.SSID().c_str(),
+                                  WiFi.localIP().toString().c_str(),
+                                  WiFi.RSSI());
+                }
+                Serial.println();
+            } else {
+                // LAN mode
+                bool ethOk = ETH.linkUp();
+                Serial.printf("[PROBE] ETH      : %s", ethOk ? "LINK UP" : "LINK DOWN");
+                if (ethOk) {
+                    Serial.printf("  |  IP=%s", ETH.localIP().toString().c_str());
+                }
+                Serial.println();
+            }
+            Serial.printf("[PROBE] MQTT     : (shell phase - not started yet)  Broker=%s:%d\n",
+                          brokerStr, MQTT_PORT);
+
+            // Shell phase check: DHCP assigned + broker ping
+            IPAddress localIp = (netMode < 2) ? WiFi.localIP() : ETH.localIP();
+            bool dhcpOk = (localIp != IPAddress(0, 0, 0, 0));
+            Serial.printf("[PROBE] DHCP     : %s  |  IP=%s\n",
+                          dhcpOk ? "OK" : "FAIL (no IP)",
+                          localIp.toString().c_str());
+
+            if (dhcpOk) {
+                IPAddress broker;
+                broker.fromString(brokerStr);
+                Serial.printf("[PROBE] Broker   : ping %s ... ", brokerStr);
+                bool pingOk = Ping.ping(broker, 1);
+                if (pingOk)
+                    Serial.printf("OK  (%.1f ms)\n", Ping.averageTime());
+                else
+                    Serial.println("FAIL (unreachable)");
+            } else {
+                Serial.printf("[PROBE] Broker   : skip (DHCP failed)\n");
+            }
+            // TFmini: boot-time detection result (UART2 frame probe is boot-time only)
+            bool tfDetected = (sensorMode == SENSOR_TFMINI);
+
+            // VL53L5CX: live I2C probe at 0x29
+            Wire.beginTransmission(0x29);
+            bool vl53Detected = (Wire.endTransmission() == 0);
+
+            Serial.printf("[PROBE] TFmini   : %s\n",
+                          tfDetected   ? "DETECTED    (UART2 IO16)         <- active"
+                                       : "not detected (boot-time UART2 probe)");
+            Serial.printf("[PROBE] VL53L5CX : %s\n",
+                          vl53Detected ? (tfDetected
+                                       ? "DETECTED    (I2C 0x29)            <- standby (TFmini priority)"
+                                       : "DETECTED    (I2C 0x29)            <- active")
+                                       : "not detected (I2C 0x29 NACK)");
             Serial.println("[PROBE] ────────────────────────────────────────────────────");
+
 
         } else if (cmd == "test led") {
             // ── Phase 1: 3개 동시 ON/OFF 토글 3회 (active-LOW) ──────
-            Serial.println("[LED] Phase1: M_LED_1/2/3 동시 토글 x3...");
+            Serial.println("[LED] Phase1: M_LED_1/2/3 simultaneous toggle x3...");
             for (int i = 0; i < 3; i++) {
                 digitalWrite(PIN_M_LED_1, LOW);
                 digitalWrite(PIN_M_LED_2, LOW);
@@ -267,7 +312,7 @@ void shell_run(Env &e, int netMode, SensorMode sensorMode) {
                 delay(500);
             }
             // ── Phase 2: 1→2→3 순서로 1초 간격 ON/OFF ─────────────
-            Serial.println("[LED] Phase2: 1→2→3 순차 점등...");
+            Serial.println("[LED] Phase2: 1->2->3 sequential...");
             const int seqPins[] = {PIN_M_LED_1, PIN_M_LED_2, PIN_M_LED_3};
             for (int i = 0; i < 3; i++) {
                 Serial.printf("  LED%d ON\n", i + 1);
@@ -333,7 +378,7 @@ void shell_run(Env &e, int netMode, SensorMode sensorMode) {
             int sw0 = digitalRead(PIN_DIP_SW0);
             int sw1 = digitalRead(PIN_DIP_SW1);
             int val = (sw1 << 1) | sw0;
-            Serial.printf("[DIPSW] SW1(VN)=%d  SW0(VP)=%d  →  Value=%d\n",
+            Serial.printf("[DIPSW] SW1(VN)=%d  SW0(VP)=%d  ->  Value=%d\n",
                           sw1, sw0, val);
 
         } else if (cmd == "run") {
