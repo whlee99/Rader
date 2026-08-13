@@ -119,7 +119,7 @@ class SraderDashboard(QMainWindow):
         root.addWidget(bar)
 
         # 2) 기울기
-        tilt_box = QGroupBox("기울기 상태 (S1: TFmini Plus)")
+        tilt_box = QGroupBox("기울기")
         tilt_lay = QHBoxLayout(tilt_box)
         tilt_lay.setSpacing(8)
         self.s1l_lbl = QLabel("S1-L: --")
