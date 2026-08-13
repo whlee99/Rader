@@ -49,6 +49,7 @@ def build():
         "--noconfirm",                       # dist 폴더 덮어쓰기 확인 생략
         # PySide6 Qt 플러그인 포함
         "--collect-all", "PySide6",
+        "--collect-all", "shiboken6",
         # paho-mqtt
         "--hidden-import", "paho.mqtt.client",
         "--hidden-import", "paho.mqtt",

@@ -43,6 +43,11 @@ def main():
         "--distpath", DIST,
         "--workpath", BUILD,
         "--specpath", HERE,
+        "--collect-all", "PySide6",
+        "--collect-all", "shiboken6",
+        "--collect-all", "esptool",
+        "--collect-all", "rich_click",
+        "--collect-all", "rich",
         SCRIPT,
     ]
 

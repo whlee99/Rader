@@ -65,6 +65,7 @@ def build():
         "--noconfirm",                               # dist 덮어쓰기 확인 생략
         "--paths", str(ROOT),                        # 프로젝트 루트를 sys.path에 추가
         "--collect-all", "PySide6",                  # Qt 플러그인/리소스 전체 포함
+        "--collect-all", "shiboken6",               # shiboken6/libshiboken DLL 포함
     ]
 
     for imp in HIDDEN_IMPORTS:

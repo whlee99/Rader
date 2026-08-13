@@ -263,25 +263,38 @@
    외부 제한 저항을 통해 LAN8720 LED 출력에 직접 연결.
 
    LAN8720 LED 핀 (24-QFN 기준):
-     LED1 (pin 20) : Link / Activity  — Active-Low, open-drain
-                     링크 확립 시 ON, 트래픽 발생 시 점멸
-     LED2 (pin 21) : Speed            — Active-Low, open-drain
-                     100Mbps=ON, 10Mbps=OFF
+     LED1 (pin 3  / REGOFF)   : Link / Activity  — Active-Low, push-pull
+                                 링크 확립 시 ON, 트래픽 발생 시 점멸
+     LED2 (pin 2  / nINTSEL)  : Speed            — push-pull
+                                 HIGH = 10Mbps 또는 링크 없음 (no link)
+                                 LOW  = 100Mbps
+                                 ※ 100Mbps 운용 시 LED2=LOW → 소스 회로에서 LED OFF
 
-   배선 (Active-Low 구동):
-     3.3V → 330Ω → RD1-125BAG1A Green  LED Anode (LEDG_A)
-                    RD1-125BAG1A Green  LED Cathode (LEDG_K) → LAN8720 LED1 (pin 20)
+   LAN8720A Strap (리셋 시 핀 샘플링):
+     pin 3 (REGOFF)  : LOW 시 내부 1.2V 레귤레이터 OFF (외부 전원 사용 시)
+                        HIGH(기본) 시 내부 레귤레이터 ON
+     pin 2 (nINTSEL) : LOW 시 리셋 후 nINT 모드 (인터럽트 출력)
+                        HIGH(기본) 시 리셋 후 LED2 모드 (Speed 표시)
+     ※ LED2 Speed 표시 극성 변경을 위한 Strap 없음.
+        소프트웨어 레지스터로도 LED2 극성 변경 불가.
 
-     3.3V → 330Ω → RD1-125BAG1A Yellow LED Anode (LEDY_A)
-                    RD1-125BAG1A Yellow LED Cathode (LEDY_K) → LAN8720 LED2 (pin 21)
+   배선:
+     LED1 (Active-Low → 싱크 방식):
+       3.3V → 330Ω → RD1-125BAG1A Green  LED Anode (LEDG_A)
+                      RD1-125BAG1A Green  LED Cathode (LEDG_K) → LAN8720 LED1 (pin 3)
 
-   제한 저항 선택:
-     330Ω : 표준 밝기 (권장)
-     220Ω : 밝게
-     470Ω : 어둡게
+     LED2 (소스 방식 — 현재 보드):
+       LAN8720 LED2 (pin 2) → 240Ω → RD1-125BAG1A Yellow LED Anode (LEDY_A)
+                                       RD1-125BAG1A Yellow LED Cathode (LEDY_K) → GND
+       실제 동작: 부팅/No-link/10Mbps = LED ON, 100Mbps = LED OFF
 
-   ※ 실측 확인: LAN8720 LED1/LED2 → 330Ω → 3.3V / RD1-125BAG1A LED 핀 연결 후
-                100Mbps 링크 시 Green ON, Yellow ON 정상 점등 확인.
+     LED2 (싱크 방식 — 다음 보드 rev 권장):
+       3.3V → 240Ω → RD1-125BAG1A Yellow LED Anode (LEDY_A)
+                      RD1-125BAG1A Yellow LED Cathode (LEDY_K) → LAN8720 LED2 (pin 2)
+       변경 후: 100Mbps = LED ON, 부팅/No-link/10Mbps = LED OFF
+
+   ※ 실측 확인: LED1(Green) → 100Mbps 링크 시 ON, 트래픽 시 점멸 정상.
+                LED2(Yellow) → 부팅/No-link 시 ON, 100Mbps 링크 확립 후 OFF (소스 회로 특성).
 
 4.7 test lan8720 (Minishell 명령)
 
@@ -356,8 +369,10 @@
   ─────────────────    ──────────────────────────────────────────────────────
   TX 센터탭 바이어스   TX 트랜스포머 센터탭 → 49.9Ω (1%) → 3.3V  (필수)
   RX 센터탭 바이어스   RX 트랜스포머 센터탭 → 49.9Ω (1%) → 3.3V  (필수)
-  Link/Act LED         LAN8720 LED1 (pin 20, Active-Low) → 330Ω → 3.3V → RJ45 LED_K
-  Speed LED            LAN8720 LED2 (pin 21, Active-Low) → 330Ω → 3.3V → RJ45 LED_K
+  Link/Act LED         LAN8720 LED1 (pin 3/REGOFF,  Active-Low)  → 330Ω → 3.3V → RJ45 LED_K
+  Speed LED            LAN8720 LED2 (pin 2/nINTSEL, 소스방식) → 240Ω → RJ45 LED_A → GND
+                       실제: 부팅/No-link/10Mbps=ON, 100Mbps=OFF
+                       Rev 수정: 싱크방식(3.3V→240Ω→LED→LED2)으로 변경 시 100Mbps=ON
   ※ 센터탭 저항 미장착 시: 10Mbps Half 로만 링크, DHCP 실패.
      장착 후 확인: 100Mbps Full-Duplex, DHCP 정상, Ping OK.
 

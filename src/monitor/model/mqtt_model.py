@@ -6,6 +6,7 @@ QThread 안에서 동작하며 수신된 JSON payload 를 파싱해 시그널로
 
 import json
 import time
+import threading
 
 from PySide6.QtCore import QObject, QThread, Signal, Slot
 
@@ -30,11 +31,11 @@ class _MqttWorker(QObject):
 
     def __init__(self, broker: str, port: int, client_id: str = "rader_monitor"):
         super().__init__()
-        self.broker    = broker
-        self.port      = port
+        self.broker     = broker
+        self.port       = port
         self._client_id = client_id
-        self._client   = None
-        self._running  = False
+        self._client    = None
+        self._stop_event = threading.Event()
 
     def _log(self, msg: str):
         self.log_signal.emit(msg)
@@ -101,7 +102,7 @@ class _MqttWorker(QObject):
             self.finished.emit()
             return
 
-        self._running = True
+        self._stop_event.clear()
         self._client.loop_start()
 
         # 접속 대기 (최대 5초)
@@ -115,9 +116,8 @@ class _MqttWorker(QObject):
             self.finished.emit()
             return
 
-        # 메시지 수신은 loop_start 가 처리하므로 여기서는 stop 신호 대기
-        while self._running:
-            time.sleep(0.1)
+        # 메시지 수신은 loop_start 가 처리하므로 여기서는 stop 이벤트 대기
+        self._stop_event.wait()
 
         self._client.loop_stop()
         self._client.disconnect()
@@ -125,7 +125,7 @@ class _MqttWorker(QObject):
         self.finished.emit()
 
     def stop(self):
-        self._running = False
+        self._stop_event.set()
 
 
 # ── 퍼블릭 Model 클래스 ───────────────────────────────────────────────────────
@@ -150,6 +150,9 @@ class MqttModel(QObject):
         self._thread: QThread     | None = None
 
     def connect_broker(self, broker: str, port: int):
+        if not MQTT_AVAILABLE:
+            self.log_signal.emit("ERROR: paho-mqtt 미설치  →  pip install paho-mqtt")
+            return
         if self._thread and self._thread.isRunning():
             return
 

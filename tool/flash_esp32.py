@@ -25,41 +25,59 @@ from PySide6.QtGui import QFont, QColor, QTextCursor
 
 # ── esptool 위치 탐색 ───────────────────────────────────────────────────────
 def find_esptool():
-    """Find esptool command. Works both as .py script and frozen exe.
+    """Find esptool command. Returns (cmd_list, env_extra_dict).
 
     PyInstaller --onefile exe 에서 sys.executable 은 RaderFlash.exe 자신이므로
     [sys.executable, "-m", "esptool"] 을 그대로 사용하면 exe가 자신을 재실행함.
     → frozen 여부를 확인하고 실제 Python 경로를 우선 탐색한다.
+
+    번들 esptool 우선순위:
+      1. frozen + _MEIPASS 에 esptool 패키지 존재 → PYTHONPATH=_MEIPASS + 시스템 Python
+      2. PlatformIO 번들 python.exe + esptool.py
+      3. PATH 의 esptool 실행 파일
+      4. 비-frozen: sys.executable -m esptool
+      5. 시스템 Python fallback
     """
     import shutil
 
     is_frozen = getattr(sys, "_MEIPASS", None) is not None
 
-    # ── PlatformIO 번들 경로 (프로젝트 전용, 가장 안정적) ──────────────────
-    pio_python  = os.path.expanduser(
-        r"~\.platformio\penv\Scripts\python.exe")
-    pio_esptool = os.path.expanduser(
-        r"~\.platformio\packages\tool-esptoolpy\esptool.py")
-    if os.path.exists(pio_python) and os.path.exists(pio_esptool):
-        return [pio_python, pio_esptool]
+    # ── 1. frozen + 번들 esptool (_MEIPASS 안의 esptool 패키지 사용) ──────
+    if is_frozen:
+        meipass = sys._MEIPASS
+        esptool_pkg = os.path.join(meipass, "esptool")
+        if os.path.isdir(esptool_pkg):
+            # PYTHONPATH=_MEIPASS 로 시스템 Python 에서 esptool 실행
+            pio_py = os.path.expanduser(r"~\.platformio\penv\Scripts\python.exe")
+            candidates = [pio_py] + [shutil.which(n) for n in ("python", "python3", "python.exe")]
+            for py in candidates:
+                if py and os.path.exists(py) and py != sys.executable:
+                    env_extra = {"PYTHONPATH": meipass}
+                    return ([py, "-m", "esptool"], env_extra)
 
-    # ── PATH 에 esptool 실행 파일이 있으면 직접 사용 ──────────────────────
+    # ── 2. PlatformIO 번들 경로 (가장 안정적) ─────────────────────────────
+    pio_python  = os.path.expanduser(r"~\.platformio\penv\Scripts\python.exe")
+    pio_esptool = os.path.expanduser(r"~\.platformio\packages\tool-esptoolpy\esptool.py")
+    if os.path.exists(pio_python) and os.path.exists(pio_esptool):
+        return ([pio_python, pio_esptool], {})
+
+    # ── 3. PATH 에 esptool 실행 파일이 있으면 직접 사용 ──────────────────
     for name in ("esptool", "esptool.exe"):
         found = shutil.which(name)
         if found:
-            return [found]
+            return ([found], {})
 
-    # ── 스크립트로 직접 실행 시에만 sys.executable 사용 ───────────────────
+    # ── 4. 비-frozen: sys.executable 사용 가능 ────────────────────────────
     if not is_frozen:
         try:
             import esptool  # noqa: F401
-            return [sys.executable, "-m", "esptool"]
+            return ([sys.executable, "-m", "esptool"], {})
         except ImportError:
             pass
         if os.path.exists(pio_esptool):
-            return [sys.executable, pio_esptool]
+            return ([sys.executable, pio_esptool], {})
 
-    # ── 시스템 Python 탐색 (frozen 환경 fallback) ─────────────────────────
+    # ── 5. 시스템 Python fallback ─────────────────────────────────────────
     for py in ("python", "python3", "python.exe"):
         found = shutil.which(py)
         if found and found != sys.executable:
@@ -68,13 +86,13 @@ def find_esptool():
                     [found, "-c", "import esptool"],
                     capture_output=True, timeout=5)
                 if r.returncode == 0:
-                    return [found, "-m", "esptool"]
+                    return ([found, "-m", "esptool"], {})
             except Exception:
                 pass
 
-    return None
+    return (None, {})
 
-ESPTOOL_CMD = find_esptool()
+ESPTOOL_CMD, ESPTOOL_ENV = find_esptool()
 
 # ── 기본 fw 폴더 ────────────────────────────────────────────────────────────
 def default_fw_dir():
@@ -594,12 +612,15 @@ class FlashTool(QMainWindow):
         sig.log.emit("─" * 60)
 
         try:
+            _env = os.environ.copy()
+            _env.update(ESPTOOL_ENV)
             proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
-                bufsize=1
+                bufsize=1,
+                env=_env,
             )
             percent = 0
             for line in proc.stdout:

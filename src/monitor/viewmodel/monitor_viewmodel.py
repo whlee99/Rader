@@ -217,7 +217,7 @@ class MonitorViewModel(QObject):
         tilt_limit   = float(self._config.get("tilt_limit_deg",  15.0))
         threshold_mm =   int(self._config.get("threshold_mm",     300))
 
-        if gap_cm > 0 and (left_cm or right_cm):
+        if gap_cm > 0 and "L" in self._s1_buf and "R" in self._s1_buf:
             diff_cm  = right_cm - left_cm
             tilt_deg = math.degrees(math.atan(diff_cm / gap_cm)) - baseline
         else:
@@ -264,11 +264,4 @@ class MonitorViewModel(QObject):
             f"min_d={overall_min}mm  S2×{len(s2)}"
         )
 
-    @staticmethod
-    def _d64_to_cols(d64: list) -> list:
-        """64값(8×8) → 8열 최솟값 (열별 8개 row 중 min)"""
-        result = []
-        for col in range(8):
-            col_vals = [d64[row * 8 + col] for row in range(8) if row * 8 + col < len(d64)]
-            result.append(min(col_vals) if col_vals else 4000)
-        return result
+

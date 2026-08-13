@@ -183,9 +183,9 @@ class SraderDashboard(QMainWindow):
         self.s1r_lbl.setText(right)
 
     @Slot(int, list)
-    def _on_s2(self, idx: int, cols: list):
+    def _on_s2(self, idx: int, d64: list):
         if idx < len(self.obs_widgets):
-            self.obs_widgets[idx].update_data(cols)
+            self.obs_widgets[idx].update_data(d64)
 
     @Slot(object)
     def _on_status(self, info: StatusInfo):
