@@ -29,7 +29,7 @@ class Constants:
     COLOR_WARNING    = QColor("#FF9800")
     COLOR_CAUTION    = QColor("#FFC107")
     COLOR_NORMAL     = QColor("#4CAF50")
-    COLOR_SAFE       = QColor("#1E88E5")
+    COLOR_SAFE       = QColor("#004D5A")
     COLOR_BACKGROUND = QColor("#444")
     COLOR_GRID_LINE  = QColor("#2E2E2E")
 

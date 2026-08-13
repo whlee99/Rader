@@ -57,8 +57,8 @@ QPushButton:pressed { background-color: #777; }
 """
 
 _STATUS_STYLE = {
-    "OK":   "background-color:#2e7d32; font-size:18px; font-weight:bold; padding:8px; border-radius:4px;",
-    "FAIL": "background-color:#b71c1c; font-size:18px; font-weight:bold; padding:8px; border-radius:4px;",
+    "OK":   "background-color:#1a3d1a; color:#66bb6a; font-size:18px; font-weight:bold; padding:8px; border-radius:4px;",
+    "FAIL": "background-color:#3d0e0e; color:#ef5350; font-size:18px; font-weight:bold; padding:8px; border-radius:4px;",
 }
 
 S2_MAX = 10
@@ -210,7 +210,7 @@ class SraderDashboard(QMainWindow):
     @Slot(bool, str)
     def _on_config_loaded(self, ok: bool, msg: str):
         if ok:
-            self.status_lbl.setText("SYSTEM OK  (config 로드완료)")
+            self.status_lbl.setText("SYSTEM OK")
             self.status_lbl.setStyleSheet(_STATUS_STYLE["OK"])
         else:
             self.status_lbl.setText("⏳ config 대기 중 — Setup PC에서 RDR/config 전송하세요")
