@@ -253,8 +253,8 @@ class MonitorViewModel(QObject):
 
         self.tilt_updated.emit(round(tilt_deg, 2))
         self.s1_labels_updated.emit(
-            f"S1-L: {left_cm} cm  ({left_cm * 10} mm)",
-            f"S1-R: {right_cm} cm  ({right_cm * 10} mm)",
+            f"S1-L: {left_cm} cm",
+            f"S1-R: {right_cm} cm",
         )
 
         # ── S2: MAC → 슬롯 매핑으로 업데이트 ──────────────────────────────

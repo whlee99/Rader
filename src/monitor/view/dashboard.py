@@ -124,6 +124,8 @@ class SraderDashboard(QMainWindow):
         tilt_lay.setSpacing(8)
         self.s1l_lbl = QLabel("S1-L: --")
         self.s1r_lbl = QLabel("S1-R: --")
+        self.s1l_lbl.setFixedWidth(100)
+        self.s1r_lbl.setFixedWidth(100)
         self.s1l_lbl.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self.s1r_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self.tilt_widget = TiltIndicatorWidget()
