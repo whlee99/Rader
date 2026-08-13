@@ -8,10 +8,8 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget,
     QVBoxLayout, QHBoxLayout,
     QGroupBox, QLabel,
-    QPushButton,
-    QTextEdit,
+    QPushButton, QFrame,
 )
-from PySide6.QtGui import QFont
 from PySide6.QtCore import Qt, Slot
 
 from .widgets import (
@@ -19,6 +17,7 @@ from .widgets import (
     TiltIndicatorWidget,
     ObstacleColumnWidget,
     ColorBarWidget,
+    BlinkDot,
 )
 from ..viewmodel.monitor_viewmodel import MonitorViewModel, StatusInfo
 
@@ -61,12 +60,8 @@ _STATUS_STYLE = {
     "OK":   "background-color:#2e7d32; font-size:18px; font-weight:bold; padding:8px; border-radius:4px;",
     "FAIL": "background-color:#b71c1c; font-size:18px; font-weight:bold; padding:8px; border-radius:4px;",
 }
-_CONN_STYLE = {
-    True:  "color:#4caf50; font-weight:bold;",
-    False: "color:#aaa;    font-weight:bold;",
-}
 
-S2_COUNT = 5
+S2_MAX = 10
 
 
 class SraderDashboard(QMainWindow):
@@ -74,7 +69,7 @@ class SraderDashboard(QMainWindow):
         super().__init__()
         self._vm = vm
         self.setWindowTitle("Srader - 무대 조명 안전 모니터링 시스템")
-        self.resize(700, 660)
+        self.resize(700, 580)
         self._build_ui()
         self._bind()
 
@@ -86,19 +81,42 @@ class SraderDashboard(QMainWindow):
         root.setSpacing(6)
         root.setContentsMargins(10, 10, 10, 10)
 
-        # 1) 브로커 상태 표시줄 (localhost 고정, UI 입력 불필요)
-        conn_box = QGroupBox("브로커 연결")
-        conn_lay = QHBoxLayout(conn_box)
-        conn_lay.addWidget(QLabel("Broker :"))
-        broker_info = QLabel("localhost : 1883  (Mosquitto)")
-        broker_info.setStyleSheet("color:#aaa;")
-        conn_lay.addWidget(broker_info)
-        conn_lay.addSpacing(24)
-        self.conn_status_lbl = QLabel("● 연결 중...")
-        self.conn_status_lbl.setStyleSheet(_CONN_STYLE[False])
-        conn_lay.addWidget(self.conn_status_lbl)
-        conn_lay.addStretch()
-        root.addWidget(conn_box)
+        # 1) 센서 상태바 (브로커 GroupBox 대체)
+        bar = QWidget()
+        bar.setStyleSheet("background-color:#2a2a2a; border-radius:4px;")
+        bar.setFixedHeight(48)
+        bar_lay = QHBoxLayout(bar)
+        bar_lay.setContentsMargins(10, 4, 10, 4)
+        bar_lay.setSpacing(4)
+
+        self.dot_mqtt = BlinkDot("MQTT")
+        self.dot_rx   = BlinkDot("RX")
+        bar_lay.addWidget(self.dot_mqtt)
+        bar_lay.addWidget(self.dot_rx)
+
+        sep = QFrame()
+        sep.setFrameShape(QFrame.VLine)
+        sep.setStyleSheet("background-color:#555;")
+        sep.setFixedWidth(1)
+        bar_lay.addSpacing(6)
+        bar_lay.addWidget(sep)
+        bar_lay.addSpacing(6)
+
+        # S1-L ― S2-1..N ― S1-R
+        self.dot_s1l = BlinkDot("S1-L")
+        bar_lay.addWidget(self.dot_s1l)
+
+        self.dots_s2: list[BlinkDot] = []
+        for i in range(S2_MAX):
+            d = BlinkDot(f"S2-{i + 1}")
+            d.hide()
+            self.dots_s2.append(d)
+            bar_lay.addWidget(d)
+
+        self.dot_s1r = BlinkDot("S1-R")
+        bar_lay.addWidget(self.dot_s1r)
+        bar_lay.addStretch()
+        root.addWidget(bar)
 
         # 2) 기울기
         tilt_box = QGroupBox("기울기 상태 (S1: TFmini Plus)")
@@ -115,13 +133,14 @@ class SraderDashboard(QMainWindow):
         root.addWidget(tilt_box)
 
         # 3) 장애물 감지
-        obs_box = QGroupBox(f"하부 장애물 감지 (S2 × {S2_COUNT})")
+        obs_box = QGroupBox(f"하부 장애물 감지 (S2 × {S2_MAX})")  # 실제 표시는 _on_s2_count에서 갱신
         obs_lay = QVBoxLayout(obs_box)
 
         sensor_row = QHBoxLayout()
         self.obs_widgets: list[ObstacleColumnWidget] = []
-        for i in range(S2_COUNT):
+        for i in range(S2_MAX):
             w = ObstacleColumnWidget(f"S2-{i+1}")
+            w.hide()   # config 로드 전엔 숨김
             self.obs_widgets.append(w)
             sensor_row.addWidget(w)
         sensor_row.addWidget(ColorBarWidget())
@@ -152,19 +171,7 @@ class SraderDashboard(QMainWindow):
         self.status_lbl.setStyleSheet(_STATUS_STYLE["OK"])
         root.addWidget(self.status_lbl)
 
-        # 5) 로그
-        log_box = QGroupBox("수신 로그")
-        log_lay = QVBoxLayout(log_box)
-        self.log_edit = QTextEdit()
-        self.log_edit.setReadOnly(True)
-        self.log_edit.setFont(QFont("Consolas", 8))
-        self.log_edit.setFixedHeight(100)
-        log_lay.addWidget(self.log_edit)
-        clr_btn = QPushButton("로그 지우기")
-        clr_btn.setFixedWidth(90)
-        clr_btn.clicked.connect(self.log_edit.clear)
-        log_lay.addWidget(clr_btn, alignment=Qt.AlignRight)
-        root.addWidget(log_box)
+
 
     # ── ViewModel 바인딩 ──────────────────────────────────────────────────────
     def _bind(self):
@@ -172,10 +179,14 @@ class SraderDashboard(QMainWindow):
         self._vm.s1_labels_updated.connect(self._on_s1_labels)
         self._vm.s2_updated.connect(self._on_s2)
         self._vm.status_updated.connect(self._on_status)
-        self._vm.log_signal.connect(self._append_log)
         self._vm.mqtt_connected.connect(self._on_connected)
         self._vm.mqtt_disconnected.connect(self._on_disconnected)
         self._vm.config_loaded.connect(self._on_config_loaded)
+        self._vm.rx_blinked.connect(self.dot_rx.blink)
+        self._vm.s1_blinked.connect(self._on_s1_blink)
+        self._vm.s2_blinked.connect(self._on_s2_blink)
+        self._vm.s2_count_changed.connect(self._on_s2_count)
+        self._vm.s1_mapped_changed.connect(self._on_s1_mapped)
     # ── 슬롯 ──────────────────────────────────────────────────────────────────
     @Slot(str, str)
     def _on_s1_labels(self, left: str, right: str):
@@ -204,22 +215,41 @@ class SraderDashboard(QMainWindow):
                 "background-color:#e65100; font-size:16px; "
                 "font-weight:bold; padding:8px; border-radius:4px;"
             )
-        self._append_log(msg)
 
     @Slot()
     def _on_connected(self):
-        self.conn_status_lbl.setText("● 수신 중")
-        self.conn_status_lbl.setStyleSheet(_CONN_STYLE[True])
+        self.dot_mqtt.set_connected(True)
 
     @Slot()
     def _on_disconnected(self):
-        self.conn_status_lbl.setText("● 미접속 (재시도 중...)")
-        self.conn_status_lbl.setStyleSheet(_CONN_STYLE[False])
+        self.dot_mqtt.set_connected(False)
 
-    def _append_log(self, msg: str):
-        self.log_edit.append(msg)
-        sb = self.log_edit.verticalScrollBar()
-        sb.setValue(sb.maximum())
+    @Slot(str)
+    def _on_s1_blink(self, role: str):
+        if role == "L":
+            self.dot_s1l.blink()
+        elif role == "R":
+            self.dot_s1r.blink()
+
+    @Slot(int)
+    def _on_s2_blink(self, slot: int):
+        if 0 <= slot < len(self.dots_s2):
+            self.dots_s2[slot].blink()
+
+    @Slot(int)
+    def _on_s2_count(self, count: int):
+        for i, d in enumerate(self.dots_s2):
+            visible = i < count
+            d.setVisible(visible)
+            d.set_mapped(visible)
+        # obs_widgets 동기화
+        for i, w in enumerate(self.obs_widgets):
+            w.setVisible(i < count)
+
+    @Slot(bool, bool)
+    def _on_s1_mapped(self, has_l: bool, has_r: bool):
+        self.dot_s1l.set_mapped(has_l)
+        self.dot_s1r.set_mapped(has_r)
 
     def _set_mode(self, mode: DisplayMode):
         for w in self.obs_widgets:

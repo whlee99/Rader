@@ -10,8 +10,8 @@ Model(MqttModel) 로부터 raw payload 를 받아 View 에 표시할 데이터�
 
 import math
 import json
+import socket
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -50,6 +50,12 @@ class MonitorViewModel(QObject):
     mqtt_connected      = Signal()
     mqtt_disconnected   = Signal()
     config_loaded       = Signal(bool, str)  # (success, message)
+    # ── 인디케이터 blink 시그널 ─────────────────────────────────────────────
+    rx_blinked          = Signal()           # 패킷 수신 시
+    s1_blinked          = Signal(str)        # "L" or "R"
+    s2_blinked          = Signal(int)        # slot index 0~9
+    s2_count_changed    = Signal(int)        # config 로드 시 S2 등록 개수
+    s1_mapped_changed   = Signal(bool, bool) # (L매핑여부, R매핑여부)
 
     # config 파일: 프로젝트 루트 / config / rader_config.json
     CONFIG_PATH = (Path(__file__).resolve().parent.parent.parent.parent
@@ -86,6 +92,9 @@ class MonitorViewModel(QObject):
         self._drain_timer.timeout.connect(self._drain_pending)
         self._drain_timer.start()
 
+        # UDP 로그 송출: 이벤트성 메시지만 (고빈도 패킷 로그 제외)
+        self.log_signal.connect(self._send_udp_log)
+
         # Model 시그널 연결
         self._model.payload_received.connect(self._on_payload)
         self._model.config_received.connect(self._on_config_received)
@@ -102,6 +111,19 @@ class MonitorViewModel(QObject):
 
     def cleanup(self):
         self._model.cleanup()
+
+    @Slot(str)
+    def _send_udp_log(self, msg: str):
+        """이벤트성 로그를 192.168.0.20:8096 UDP 로 송출.
+        소켓을 매번 생성/닫아 상태 없이 fire-and-forget.
+        리스너 없어도 블로킹하지 않음 (setblocking=False)."""
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.setblocking(False)
+            sock.sendto(msg.encode("utf-8", errors="replace"), ("192.168.0.20", 8096))
+            sock.close()
+        except Exception:
+            pass
 
     # ── Config 로드 ──────────────────────────────────────────────────
     def load_config(self, path: Path = None) -> tuple[bool, str]:
@@ -146,6 +168,11 @@ class MonitorViewModel(QObject):
 
         self._s1_buf.clear()       # 이전 버퍼 초기화
         self._s2_min_dist.clear()   # S2 누적 상태 초기화
+        # 인디케이터 매핑 상태 통보
+        has_l = any(v == "L" for v in self._mac_to_role.values())
+        has_r = any(v == "R" for v in self._mac_to_role.values())
+        self.s1_mapped_changed.emit(has_l, has_r)
+        self.s2_count_changed.emit(len(self._mac_to_s2_slot))
         s1_mapped = ", ".join(f"{m}→{r}" for m, r in self._mac_to_role.items()) or "(매핑 없음)"
         s2_mapped = ", ".join(f"{m}→슬롯{i}" for m, i in self._mac_to_s2_slot.items()) or "(매핑 없음)"
         msg = (f"config 로드 성공: {p}\n"
@@ -208,6 +235,7 @@ class MonitorViewModel(QObject):
             role = self._mac_to_role.get(mac, "")
             if role in ("L", "R"):
                 self._s1_buf[role] = s1[0]
+                self.s1_blinked.emit(role)
 
         left_cm  = self._s1_buf.get("L", 0)
         right_cm = self._s1_buf.get("R", 0)
@@ -238,6 +266,7 @@ class MonitorViewModel(QObject):
                 # target_status == 5, 범위초과(65535) 제외, 크로스토크 하한(30mm) 제외
                 valid = [d for d, s in zip(d64, st64) if s == 5 and 30 <= d < 65535]
                 self.s2_updated.emit(slot, d64)
+                self.s2_blinked.emit(slot)
                 self._s2_min_dist[slot] = min(valid) if valid else 9999
 
         # ── 전체 상태: 모든 S2 슬롯 + 기울기 종합 판단 ────────────────────────
@@ -257,11 +286,6 @@ class MonitorViewModel(QObject):
             status = StatusInfo("OK", "SYSTEM OK", tilt_deg, overall_min)
 
         self.status_updated.emit(status)
-
-        ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-        self.log_signal.emit(
-            f"[{ts}]  MAC={mac}  tilt={tilt_deg:.1f}°  "
-            f"min_d={overall_min}mm  S2×{len(s2)}"
-        )
+        self.rx_blinked.emit()
 
 

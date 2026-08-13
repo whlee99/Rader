@@ -12,7 +12,7 @@ from PySide6.QtGui import (
     QPainter, QColor, QBrush, QPen,
     QLinearGradient, QPainterPath,
 )
-from PySide6.QtCore import Qt, QRectF, Slot, QPointF
+from PySide6.QtCore import Qt, QRectF, Slot, QPointF, QTimer
 
 
 # ── 공통 상수 ─────────────────────────────────────────────────────────────────
@@ -38,6 +38,67 @@ class DisplayMode(Enum):
     BAR  = auto()
     LINE = auto()
     CELL = auto()
+
+
+# ── 0. 센서 상태 인디케이터 (Blink Dot) ──────────────────────────────────────
+class BlinkDot(QWidget):
+    """작은 원형 인디케이터 + 하단 레이블.
+    set_connected(bool)  : MQTT 연결 상태 (녹색 ↔ 회색)
+    set_mapped(bool)     : config 매핑 여부 (파란색 ↔ 어두운 회색)
+    blink()              : 150ms 노란색 플래시 후 base 색으로 복귀
+    """
+    _C_OFF      = QColor("#3a3a3a")
+    _C_MAPPED   = QColor("#1565C0")
+    _C_CONN     = QColor("#2e7d32")
+    _C_BLINK    = QColor("#FFD600")
+
+    def __init__(self, label: str, parent=None):
+        super().__init__(parent)
+        self._label      = label
+        self._base_color = self._C_OFF
+        self._color      = self._C_OFF
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.setInterval(150)
+        self._timer.timeout.connect(self._on_blink_end)
+        self.setFixedSize(32, 36)
+
+    def set_connected(self, connected: bool):
+        self._base_color = self._C_CONN if connected else self._C_OFF
+        self._refresh()
+
+    def set_mapped(self, mapped: bool):
+        self._base_color = self._C_MAPPED if mapped else self._C_OFF
+        self._refresh()
+
+    def blink(self):
+        self._color = self._C_BLINK
+        self._timer.start()
+        self.update()
+
+    def _on_blink_end(self):
+        self._color = self._base_color
+        self.update()
+
+    def _refresh(self):
+        if not self._timer.isActive():
+            self._color = self._base_color
+            self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        r  = 7
+        cx = self.width() // 2
+        painter.setBrush(QBrush(self._color))
+        painter.setPen(QPen(QColor("#222"), 1))
+        painter.drawEllipse(QPointF(cx, r + 2), r, r)
+        painter.setPen(QPen(Qt.white))
+        f = painter.font()
+        f.setPointSize(6)
+        painter.setFont(f)
+        painter.drawText(0, r * 2 + 5, self.width(), 14,
+                         Qt.AlignHCenter | Qt.AlignVCenter, self._label)
 
 
 # ── 1. 기울기 표시 위젯 ───────────────────────────────────────────────────────
