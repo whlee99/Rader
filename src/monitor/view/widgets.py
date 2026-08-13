@@ -109,7 +109,7 @@ class TiltIndicatorWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._angle = 0.0
-        self.setMinimumSize(300, 60)
+        self.setMinimumSize(200, 46)
 
     @Slot(float)
     def setAngle(self, angle: float):

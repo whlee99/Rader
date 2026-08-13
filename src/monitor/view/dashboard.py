@@ -57,8 +57,8 @@ QPushButton:pressed { background-color: #777; }
 """
 
 _STATUS_STYLE = {
-    "OK":   "background-color:#1a3d1a; color:#66bb6a; font-size:18px; font-weight:bold; padding:8px; border-radius:4px;",
-    "FAIL": "background-color:#3d0e0e; color:#ef5350; font-size:18px; font-weight:bold; padding:8px; border-radius:4px;",
+    "OK":   "background-color:#1a3d1a; color:#66bb6a; font-size:13px; font-weight:bold; padding:3px 8px; border-radius:4px;",
+    "FAIL": "background-color:#3d0e0e; color:#ef5350; font-size:13px; font-weight:bold; padding:3px 8px; border-radius:4px;",
 }
 
 S2_MAX = 10
@@ -69,7 +69,7 @@ class SraderDashboard(QMainWindow):
         super().__init__()
         self._vm = vm
         self.setWindowTitle("Srader - 무대 조명 안전 모니터링 시스템")
-        self.resize(700, 580)
+        self.resize(780, 460)
         self._build_ui()
         self._bind()
 
@@ -120,16 +120,21 @@ class SraderDashboard(QMainWindow):
 
         # 2) 기울기
         tilt_box = QGroupBox("기울기 상태 (S1: TFmini Plus)")
-        tilt_lay = QVBoxLayout(tilt_box)
+        tilt_lay = QHBoxLayout(tilt_box)
+        tilt_lay.setSpacing(8)
         self.tilt_widget = TiltIndicatorWidget()
-        s1_row = QHBoxLayout()
+        tilt_lay.addWidget(self.tilt_widget, stretch=4)
+        s1_col = QVBoxLayout()
+        s1_col.setSpacing(2)
         self.s1l_lbl = QLabel("S1-L: --")
         self.s1r_lbl = QLabel("S1-R: --")
-        s1_row.addWidget(self.s1l_lbl)
-        s1_row.addStretch()
-        s1_row.addWidget(self.s1r_lbl)
-        tilt_lay.addWidget(self.tilt_widget)
-        tilt_lay.addLayout(s1_row)
+        self.s1l_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.s1r_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        s1_col.addStretch()
+        s1_col.addWidget(self.s1l_lbl)
+        s1_col.addWidget(self.s1r_lbl)
+        s1_col.addStretch()
+        tilt_lay.addLayout(s1_col, stretch=1)
         root.addWidget(tilt_box)
 
         # 3) 장애물 감지
@@ -147,25 +152,24 @@ class SraderDashboard(QMainWindow):
         obs_lay.addLayout(sensor_row)
 
         btn_row = QHBoxLayout()
-        bar_btn  = QPushButton("Bar View")
-        line_btn = QPushButton("Line View")
-        cell_btn = QPushButton("Cell View")
-        iso_btn  = QPushButton("3D View")
+        btn_row.setContentsMargins(0, 2, 0, 2)
+        self.min_dist_lbl = QLabel("최소: --")
+        self.min_dist_lbl.setStyleSheet("color:#aaa; font-size:12px;")
+        bar_btn  = QPushButton("Bar")
+        line_btn = QPushButton("Line")
+        cell_btn = QPushButton("Cell")
+        iso_btn  = QPushButton("3D")
         bar_btn.clicked.connect(lambda: self._set_mode(DisplayMode.BAR))
         line_btn.clicked.connect(lambda: self._set_mode(DisplayMode.LINE))
         cell_btn.clicked.connect(lambda: self._set_mode(DisplayMode.CELL))
         iso_btn.clicked.connect(lambda: self._set_mode(DisplayMode.ISO))
+        btn_row.addWidget(self.min_dist_lbl)
         btn_row.addStretch()
         btn_row.addWidget(bar_btn)
         btn_row.addWidget(line_btn)
         btn_row.addWidget(cell_btn)
         btn_row.addWidget(iso_btn)
-        btn_row.addStretch()
         obs_lay.addLayout(btn_row)
-
-        self.min_dist_lbl = QLabel("최소 감지 거리: --")
-        self.min_dist_lbl.setAlignment(Qt.AlignCenter)
-        obs_lay.addWidget(self.min_dist_lbl)
         root.addWidget(obs_box)
 
         # 4) 상태 표시줄
@@ -205,7 +209,7 @@ class SraderDashboard(QMainWindow):
     def _on_status(self, info: StatusInfo):
         self.status_lbl.setText(info.message)
         self.status_lbl.setStyleSheet(_STATUS_STYLE.get(info.level, _STATUS_STYLE["OK"]))
-        self.min_dist_lbl.setText(f"최소 감지 거리: {info.min_dist_mm} mm")
+        self.min_dist_lbl.setText(f"최소: {info.min_dist_mm} mm")
 
     @Slot(bool, str)
     def _on_config_loaded(self, ok: bool, msg: str):
@@ -215,8 +219,8 @@ class SraderDashboard(QMainWindow):
         else:
             self.status_lbl.setText("⏳ config 대기 중 — Setup PC에서 RDR/config 전송하세요")
             self.status_lbl.setStyleSheet(
-                "background-color:#e65100; font-size:16px; "
-                "font-weight:bold; padding:8px; border-radius:4px;"
+                "background-color:#4a1800; color:#ffb74d; font-size:12px; "
+                "font-weight:bold; padding:3px 8px; border-radius:4px;"
             )
 
     @Slot()
