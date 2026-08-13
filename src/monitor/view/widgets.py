@@ -38,6 +38,7 @@ class DisplayMode(Enum):
     BAR  = auto()
     LINE = auto()
     CELL = auto()
+    ISO  = auto()   # 아이소메트릭 3D 막대 차트
 
 
 # ── 0. 센서 상태 인디케이터 (Blink Dot) ──────────────────────────────────────
@@ -190,9 +191,10 @@ class ObstacleColumnWidget(QWidget):
     def setDisplayMode(self, mode: DisplayMode):
         if self.display_mode != mode:
             self.display_mode = mode
-            # CELL 모드는 8×8 그리드를 위해 최소 크기 확장
             if mode == DisplayMode.CELL:
                 self.setMinimumSize(90, 130)
+            elif mode == DisplayMode.ISO:
+                self.setMinimumSize(110, 180)
             else:
                 self.setMinimumSize(70, 220)
             self.update()
@@ -204,6 +206,89 @@ class ObstacleColumnWidget(QWidget):
         if dist < Constants.OBSTACLE_DIST_CAUTION:  return Constants.COLOR_CAUTION
         if dist < Constants.OBSTACLE_DIST_NORMAL:   return Constants.COLOR_NORMAL
         return Constants.COLOR_SAFE
+
+    def _paint_iso(self, painter: QPainter, w: int, h: int, bar_top: int, bar_bot: int):
+        """8×8 아이소메트릭 3D 막대 차트 (전체 64존 raw64).
+
+        타일 배치 (col=오른쪽, row=아래쪽으로 갈수록 앞쪽):
+          sx = cx + (col - row) * cw
+          sy = cy + (col + row) * ch
+        렌더링 순서: (col+row) 오름차순 → 뒤에서 앞으로 그려 occlusion 보정.
+        """
+        avail_h = bar_bot - bar_top
+        cw      = max(4, w // 16)              # 타일 반폭 (픽셀)
+        ch      = max(2, cw // 2)              # 타일 반높이 (2:1 isometric)
+        max_bar = max(8, avail_h - 14 * ch - 8)  # 최대 바 픽셀 높이
+        cx      = w // 2
+        cy      = bar_top + max_bar + 4        # 그리드 북쪽 꼭짓점 기준 y
+        max_dist = 4000.0
+
+        # 뒤에서 앞으로: (col+row) 오름차순
+        for diag in range(15):
+            for row in range(max(0, diag - 7), min(8, diag + 1)):
+                col = diag - row
+                if not (0 <= col < 8):
+                    continue
+
+                d    = self.raw64[row * 8 + col]
+                h_px = int(max_bar * max(0.0, 1.0 - min(d, max_dist) / max_dist))
+                base = self._color(d)
+                sx   = cx + (col - row) * cw
+                sy   = cy + (col + row) * ch
+
+                # 상단면 꼭짓점 (바 높이 h_px 만큼 위로 이동)
+                top = [
+                    QPointF(sx,      sy - ch - h_px),  # north
+                    QPointF(sx + cw, sy      - h_px),  # east
+                    QPointF(sx,      sy + ch - h_px),  # south
+                    QPointF(sx - cw, sy      - h_px),  # west
+                ]
+
+                edge_pen = QPen(QColor("#0d0d0d"), 0.3)
+
+                if h_px > 1:
+                    # 오른쪽 측면 (east-south, 밝은 어두움)
+                    r_pts = [top[1], top[2],
+                             QPointF(sx,      sy + ch),
+                             QPointF(sx + cw, sy)]
+                    path = QPainterPath()
+                    path.moveTo(r_pts[0])
+                    for p in r_pts[1:]:
+                        path.lineTo(p)
+                    path.closeSubpath()
+                    painter.setBrush(QBrush(base.darker(150)))
+                    painter.setPen(edge_pen)
+                    painter.drawPath(path)
+
+                    # 왼쪽 측면 (west-south, 더 어두움)
+                    l_pts = [top[3], top[2],
+                             QPointF(sx,      sy + ch),
+                             QPointF(sx - cw, sy)]
+                    path = QPainterPath()
+                    path.moveTo(l_pts[0])
+                    for p in l_pts[1:]:
+                        path.lineTo(p)
+                    path.closeSubpath()
+                    painter.setBrush(QBrush(base.darker(190)))
+                    painter.setPen(edge_pen)
+                    painter.drawPath(path)
+
+                # 상단면 (항상 그림 — h_px=0이면 평면 다이아몬드)
+                path = QPainterPath()
+                path.moveTo(top[0])
+                for p in top[1:]:
+                    path.lineTo(p)
+                path.closeSubpath()
+                painter.setBrush(QBrush(base))
+                painter.setPen(edge_pen)
+                painter.drawPath(path)
+
+        # 최솟값 텍스트 (하단)
+        min_d = min(self.raw64)
+        painter.setPen(QPen(self._color(min_d)))
+        f = painter.font(); f.setPointSize(8); f.setBold(True); painter.setFont(f)
+        painter.drawText(0, bar_bot, w, self._VALUE_H,
+                         Qt.AlignHCenter | Qt.AlignVCenter, f"{min_d} mm")
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -226,6 +311,11 @@ class ObstacleColumnWidget(QWidget):
         bar_h    = bar_bot - bar_top    # 실제 그래프 세로 길이
         bar_w    = w / 8.0
         max_d    = 4000.0
+
+        # ── ISO 모드 조기 리턴 ────────────────────────────────────────
+        if self.display_mode == DisplayMode.ISO:
+            self._paint_iso(painter, w, h, bar_top, bar_bot)
+            return
 
         if self.display_mode == DisplayMode.BAR:
             for i, d in enumerate(self.distances):
