@@ -285,7 +285,7 @@ class ObstacleColumnWidget(QWidget):
 
         # 최솟값 텍스트 (하단)
         min_d = min(self.raw64)
-        painter.setPen(QPen(self._color(min_d)))
+        painter.setPen(QPen(Qt.white))
         f = painter.font(); f.setPointSize(8); f.setBold(True); painter.setFont(f)
         painter.drawText(0, bar_bot, w, self._VALUE_H,
                          Qt.AlignHCenter | Qt.AlignVCenter, f"{min_d} mm")
@@ -366,8 +366,7 @@ class ObstacleColumnWidget(QWidget):
                     ))
             # 최솟값 표시 후 리턴 (격자선 스킵)
             min_d = min(self.raw64)
-            color_txt = self._color(min_d)
-            painter.setPen(QPen(color_txt))
+            painter.setPen(QPen(Qt.white))
             f2 = painter.font(); f2.setPointSize(8); f2.setBold(True); painter.setFont(f2)
             painter.drawText(0, bar_bot, w, self._VALUE_H,
                              Qt.AlignHCenter | Qt.AlignVCenter,
@@ -382,8 +381,7 @@ class ObstacleColumnWidget(QWidget):
 
         # ── 최솟값 표시 (하단) ────────────────────────────────────────
         min_d = min(self.distances)
-        color_txt = self._color(min_d)
-        painter.setPen(QPen(color_txt))
+        painter.setPen(QPen(Qt.white))
         f2 = painter.font(); f2.setPointSize(8); f2.setBold(True); painter.setFont(f2)
         painter.drawText(0, bar_bot, w, self._VALUE_H,
                          Qt.AlignHCenter | Qt.AlignVCenter,
