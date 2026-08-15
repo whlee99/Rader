@@ -225,7 +225,7 @@ class SetupWindow(QMainWindow):
         self.gap_spin.setSingleStep(0.1)
         self.gap_spin.setDecimals(2)
         self.gap_spin.setSuffix(" m")
-        self.gap_spin.setValue(0.5)
+        self.gap_spin.setValue(10.0)
         self.gap_spin.setToolTip("S1-L 과 S1-R 센서 사이의 물리적 거리 (미터)")
         form.addRow("sensor_gap  (S1-L/R 사이 거리, m) :", self.gap_spin)
 
@@ -241,7 +241,7 @@ class SetupWindow(QMainWindow):
         self.threshold_spin.setRange(5, 500)
         self.threshold_spin.setSingleStep(5)
         self.threshold_spin.setSuffix(" cm")
-        self.threshold_spin.setValue(30)
+        self.threshold_spin.setValue(100)
         self.threshold_spin.setToolTip("S2 장애물 경보 발생 기준 거리 (센티미터)")
         form.addRow("threshold  (장애물 경보 거리, cm) :", self.threshold_spin)
 
@@ -372,16 +372,20 @@ class SetupWindow(QMainWindow):
         if self.s1_table.rowCount() != len(snaps):
             self.s1_table.setRowCount(len(snaps))
             for row, snap in enumerate(snaps):
-                dev    = cfg.get_device(snap.mac)
+                dev     = cfg.get_device(snap.mac)
                 s1_role = dev.s1 if dev else ""
+                if s1_role == "unset":
+                    s1_role = "(unset)"
 
                 self.s1_table.setItem(row, 0, QTableWidgetItem(snap.mac))
                 cb = self._make_combo(S1_POSITION_OPTIONS, s1_role)
                 self.s1_table.setCellWidget(row, 1, cb)
-                self.s1_table.setItem(row, 2, QTableWidgetItem(snap.last_seen))
+                dist_text = f"  {snap.s1_values[0]} cm" if snap.s1_values else ""
+                self.s1_table.setItem(row, 2, QTableWidgetItem(snap.last_seen + dist_text))
         else:
             for row, snap in enumerate(snaps):
-                self.s1_table.setItem(row, 2, QTableWidgetItem(snap.last_seen))
+                dist_text = f"  {snap.s1_values[0]} cm" if snap.s1_values else ""
+                self.s1_table.setItem(row, 2, QTableWidgetItem(snap.last_seen + dist_text))
 
     def _refresh_s2_table(self, snaps: list):
         cfg = self._vm.get_config()
@@ -390,14 +394,18 @@ class SetupWindow(QMainWindow):
             for row, snap in enumerate(snaps):
                 dev    = cfg.get_device(snap.mac)
                 s2_lbl = dev.s2[0] if dev and dev.s2 else ""
+                if s2_lbl == "unset":
+                    s2_lbl = "(unset)"
 
                 self.s2_table.setItem(row, 0, QTableWidgetItem(snap.mac))
                 cb = self._make_combo(S2_POSITION_OPTIONS, s2_lbl)
                 self.s2_table.setCellWidget(row, 1, cb)
-                self.s2_table.setItem(row, 2, QTableWidgetItem(snap.last_seen))
+                dist_text = f"  {snap.s2_values[0]} mm" if snap.s2_values else ""
+                self.s2_table.setItem(row, 2, QTableWidgetItem(snap.last_seen + dist_text))
         else:
             for row, snap in enumerate(snaps):
-                self.s2_table.setItem(row, 2, QTableWidgetItem(snap.last_seen))
+                dist_text = f"  {snap.s2_values[0]} mm" if snap.s2_values else ""
+                self.s2_table.setItem(row, 2, QTableWidgetItem(snap.last_seen + dist_text))
 
     @staticmethod
     def _make_combo(options: list, current: str) -> QComboBox:
@@ -415,14 +423,14 @@ class SetupWindow(QMainWindow):
             cb     = self.s1_table.cellWidget(row, 1)
             s1_val = cb.currentText() if cb else ""
             self._vm.update_device_mapping(mac, "S1",
-                                            s1_role="" if s1_val == "(unset)" else s1_val)
+                                            s1_role="unset" if s1_val == "(unset)" else s1_val)
 
         for row in range(self.s2_table.rowCount()):
             mac  = self.s2_table.item(row, 0).text()
             cb   = self.s2_table.cellWidget(row, 1)
             lbl  = cb.currentText() if cb else ""
             self._vm.update_device_mapping(mac, "S2",
-                                            s2_labels=["" if lbl == "(unset)" else lbl],
+                                            s2_labels=["unset" if lbl == "(unset)" else lbl],
                                             active_s2=64)
 
     @Slot()

@@ -40,10 +40,10 @@ class DeviceConfig:
 @dataclass
 class RaderConfig:
     devices:          list[DeviceConfig] = field(default_factory=list)
-    sensor_gap_cm:    float = 50.0
+    sensor_gap_cm:    float = 1000.0
     baseline_offset:  float = 0.0
     tilt_limit_deg:   float = 15.0
-    threshold_mm:     int   = 300
+    threshold_mm:     int   = 1000
 
     # ── 직렬화 ────────────────────────────────────────────────────────────────
     def to_dict(self) -> dict:

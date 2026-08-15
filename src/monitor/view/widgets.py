@@ -145,7 +145,7 @@ class TiltIndicatorWidget(QWidget):
         r  = 18
         cy = rect.center().y()
         max_off = rect.width() / 2 - r - 5
-        off = (self._angle / 45.0) * max_off
+        off = -(self._angle / 45.0) * max_off
         bx  = rect.center().x() + off
         br  = QRectF(bx - r, cy - r, r * 2, r * 2)
         painter.drawEllipse(br)

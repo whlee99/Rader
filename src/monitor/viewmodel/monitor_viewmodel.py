@@ -67,10 +67,10 @@ class MonitorViewModel(QObject):
 
         # 로드된 config dict (전체) — 프로그램 시작 시 읽고, MQTT 수신 시 갱신
         self._config: dict = {
-            "sensor_gap_cm":   50.0,
+            "sensor_gap_cm":   1000.0,
             "baseline_offset": 0.0,
             "tilt_limit_deg":  15.0,
-            "threshold_mm":    300,
+            "threshold_mm":    1000,
             "devices":         [],
         }
 
@@ -157,6 +157,8 @@ class MonitorViewModel(QObject):
             elif dev.get("type") == "S2":
                 # "pos1"~"pos10" → 0-based slot (pos1=0, pos2=1, ...)
                 label = (dev.get("s2") or [""])[0]
+                if label in ("", "unset"):
+                    continue   # 미사용 센서 — 슬롯 배정 제외
                 try:
                     slot = int(label.replace("pos", "")) - 1
                     if slot < 0:
@@ -190,15 +192,19 @@ class MonitorViewModel(QObject):
     def _on_config_received(self, json_text: str):
         """Setup PC로부터 RDR/config 토픽으로 수신한 config JSON을
         로컬 파일로 저장하고 즉시 적용.
-        기존 파일과 내용이 동일하면 저장/로드를 건너뜀 (재접속 반복 방지)."""
-        # 기존 파일과 동일한 내용이면 무시
-        if self.CONFIG_PATH.exists():
-            try:
-                existing = self.CONFIG_PATH.read_text(encoding="utf-8")
-                if existing.strip() == json_text.strip():
-                    return   # 변경 없음 — 조용히 무시
-            except Exception:
-                pass
+        현재 메모리 config와 동일하면 재적용 생략 (재접속 retained 반복 방지).
+        ※ 파일 비교가 아닌 메모리 비교로 수정:
+           Setup이 파일 저장 후 MQTT 발행하므로 파일 비교 시 항상 '동일'로 판정되어
+           load_config()가 호출되지 않는 버그를 방지."""
+        try:
+            new_cfg = json.loads(json_text)
+        except Exception as e:
+            self.log_signal.emit(f"[config] JSON 파싱 실패: {e}")
+            return
+
+        # 현재 로드된 config와 동일하면 무시 (재접속 retained 반복 방지)
+        if new_cfg == self._config:
+            return
 
         try:
             self.CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -246,7 +252,7 @@ class MonitorViewModel(QObject):
         threshold_mm =   int(self._config.get("threshold_mm",     300))
 
         if gap_cm > 0 and "L" in self._s1_buf and "R" in self._s1_buf:
-            diff_cm  = right_cm - left_cm
+            diff_cm  = left_cm - right_cm
             tilt_deg = math.degrees(math.atan(diff_cm / gap_cm)) - baseline
         else:
             tilt_deg = 0.0
