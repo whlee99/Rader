@@ -36,6 +36,7 @@ class DeviceSnapshot:
     last_seen:   str         # HH:MM:SS
     s1_values:   list[int]   # cm  (S1 장치)
     s2_values:   list[int]   # mm, 64 zone 최솟값 (S2 장치)
+    s2_raw64:    list[int]   = None   # mm, 64존 원시값 (S2 장치)
 
 
 # ── ViewModel ─────────────────────────────────────────────────────────────────
@@ -113,10 +114,12 @@ class SetupViewModel(QObject):
         else:
             s2_raw = data.get("s2", [{}])
             zone_d = s2_raw[0].get("d", []) if s2_raw else []
+            raw64  = (zone_d + [4000] * 64)[:64]
             min_d  = min(zone_d) if zone_d else 0
             snap   = DeviceSnapshot(
                 mac=mac, dtype="S2", last_seen=ts,
                 s1_values=[], s2_values=[min_d],
+                s2_raw64=raw64,
             )
 
         self._devices[mac] = snap

@@ -16,9 +16,10 @@ from PySide6.QtWidgets import (
     QComboBox, QSpinBox, QDoubleSpinBox,
     QTextEdit,
     QScrollArea, QFrame,
+    QDialog, QMenu,
 )
-from PySide6.QtGui import QFont
-from PySide6.QtCore import Qt, Slot
+from PySide6.QtGui import QFont, QPainter, QColor, QBrush, QPen
+from PySide6.QtCore import Qt, Slot, QRectF
 
 from ..viewmodel.setup_viewmodel import SetupViewModel, DeviceSnapshot
 from ..model.config_model import RaderConfig
@@ -50,6 +51,130 @@ QHeaderView::section { background:#444; border:1px solid #555; padding:4px; }
 _CONN_STYLE = {True: "color:#4caf50; font-weight:bold;",
                False: "color:#aaa;   font-weight:bold;"}
 
+# S2 8×8 거리 시각화 팝업 ──────────────────────────────────────────────────────
+class _S2GridWidget(QWidget):
+    """8×8 (64존) 거리 히트맵 — 색상 + 수치 표시"""
+
+    _THRESHOLDS = [
+        (500,  QColor("#f44336")),   # 위험 (빨강)
+        (1000, QColor("#ff9800")),   # 경고 (주황)
+        (2000, QColor("#ffc107")),   # 주의 (노랑)
+        (3500, QColor("#4caf50")),   # 정상 (초록)
+    ]
+    _COLOR_SAFE = QColor("#37474f")  # 안전 (짙은 회색)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._data: list[int] = [4000] * 64
+        self.setMinimumSize(400, 340)
+
+    def update_data(self, raw64: list[int]):
+        self._data = (raw64 + [4000] * 64)[:64]
+        self.update()
+
+    @classmethod
+    def _cell_color(cls, d: int) -> QColor:
+        for threshold, color in cls._THRESHOLDS:
+            if d < threshold:
+                return color
+        return cls._COLOR_SAFE
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        w, h = self.width(), self.height()
+        painter.fillRect(self.rect(), QColor("#2E2E2E"))
+
+        margin  = 6
+        cell_w  = (w - margin * 2) / 8
+        cell_h  = (h - margin * 2) / 8
+        pad     = 2
+        font    = painter.font()
+        font.setPixelSize(max(9, int(cell_h * 0.28)))
+        font.setBold(True)
+        painter.setFont(font)
+
+        for row in range(8):
+            for col in range(8):
+                idx  = row * 8 + col
+                dist = self._data[idx]
+                color = self._cell_color(dist)
+
+                x = margin + col * cell_w + pad
+                y = margin + row * cell_h + pad
+                cw = cell_w - pad * 2
+                ch = cell_h - pad * 2
+
+                painter.setBrush(QBrush(color))
+                painter.setPen(Qt.NoPen)
+                painter.drawRoundedRect(QRectF(x, y, cw, ch), 3, 3)
+
+                # 텍스트 (거리 mm)
+                painter.setPen(QPen(QColor("#000000") if color == QColor("#ffc107")
+                                    else QColor("#ffffff")))
+                label = f"{dist}" if dist < 9999 else "—"
+                painter.drawText(QRectF(x, y, cw, ch), Qt.AlignCenter, label)
+
+        # 행/열 번호 레이블
+        painter.setPen(QPen(QColor("#888888")))
+        small = painter.font()
+        small.setPixelSize(9)
+        painter.setFont(small)
+        for i in range(8):
+            cx = margin + i * cell_w + cell_w / 2
+            cy = margin + i * cell_h + cell_h / 2
+            painter.drawText(QRectF(margin - 18, cy - 7, 16, 14),
+                             Qt.AlignCenter, str(i))
+            painter.drawText(QRectF(cx - 7, margin - 16, 14, 14),
+                             Qt.AlignCenter, str(i))
+
+
+class S2GridDialog(QDialog):
+    """S2 장치 8×8 거리 세부 정보 팝업 (비모달, 실시간 갱신)"""
+
+    def __init__(self, mac: str, raw64: list[int], parent=None):
+        super().__init__(parent)
+        self._mac = mac
+        self.setWindowTitle(f"S2 세부 거리  —  {mac}")
+        self.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+        self.resize(440, 420)
+        self.setStyleSheet(STYLESHEET)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(8, 8, 8, 8)
+        lay.setSpacing(6)
+
+        # 범례
+        legend_row = QHBoxLayout()
+        for label, color in [("위험 <500", "#f44336"), ("경고 <1000", "#ff9800"),
+                              ("주의 <2000", "#ffc107"), ("정상 <3500", "#4caf50"),
+                              ("안전", "#37474f")]:
+            lbl = QLabel(f"  {label}  ")
+            lbl.setStyleSheet(
+                f"background:{color}; color:{'#000' if color=='#ffc107' else '#fff'};"
+                "border-radius:3px; padding:2px 4px; font-size:10px;")
+            legend_row.addWidget(lbl)
+        legend_row.addStretch()
+        lay.addLayout(legend_row)
+
+        self._grid = _S2GridWidget()
+        self._grid.update_data(raw64)
+        lay.addWidget(self._grid, stretch=1)
+
+        self._info_lbl = QLabel("단위: mm")
+        self._info_lbl.setStyleSheet("color:#aaa; font-size:10px;")
+        lay.addWidget(self._info_lbl)
+
+    def refresh(self, raw64: list[int]):
+        """새 패킷 수신 시 외부에서 호출"""
+        if raw64:
+            min_d = min(raw64)
+            self._info_lbl.setText(
+                f"단위: mm   |   최솟값: {min_d} mm   |   MAC: {self._mac}")
+        self._grid.update_data(raw64)
+
+
+
 # S1 위치 선택지
 S1_POSITION_OPTIONS = ["(unset)", "L", "R"]
 # S2 위치 선택지 — config에 저장되는 값이므로 영어로 고정
@@ -63,6 +188,8 @@ class SetupWindow(QMainWindow):
         self._vm = vm
         self.setWindowTitle("Srader Setup — 초기 설정 도구")
         self.resize(820, 660)
+        self._s2_dialogs: dict[str, S2GridDialog] = {}   # mac → 열린 팝업
+        self._s2_snaps:   dict[str, object]       = {}   # mac → DeviceSnapshot
         self._build_ui()
         self._bind()
 
@@ -201,6 +328,8 @@ class SetupWindow(QMainWindow):
         self.s2_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.s2_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
         self.s2_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.s2_table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.s2_table.customContextMenuRequested.connect(self._on_s2_context_menu)
         s2_lay.addWidget(self.s2_table)
         lay.addWidget(s2_box, stretch=1)
 
@@ -367,6 +496,12 @@ class SetupWindow(QMainWindow):
         self._refresh_s1_table(s1_snaps)
         self._refresh_s2_table(s2_snaps)
 
+        # ── 열린 S2 팝업 실시간 갱신 ─────────────────────────────────────────
+        for snap in s2_snaps:
+            dlg = self._s2_dialogs.get(snap.mac)
+            if dlg and dlg.isVisible() and snap.s2_raw64:
+                dlg.refresh(snap.s2_raw64)
+
     def _refresh_s1_table(self, snaps: list):
         cfg = self._vm.get_config()
         if self.s1_table.rowCount() != len(snaps):
@@ -388,6 +523,7 @@ class SetupWindow(QMainWindow):
                 self.s1_table.setItem(row, 2, QTableWidgetItem(snap.last_seen + dist_text))
 
     def _refresh_s2_table(self, snaps: list):
+        self._s2_snaps = {s.mac: s for s in snaps}   # context menu 에서 접근용
         cfg = self._vm.get_config()
         if self.s2_table.rowCount() != len(snaps):
             self.s2_table.setRowCount(len(snaps))
@@ -414,6 +550,34 @@ class SetupWindow(QMainWindow):
         if current in options:
             cb.setCurrentText(current)
         return cb
+
+    @Slot(object)
+    def _on_s2_context_menu(self, pos):
+        """S2 테이블 우클릭 → 8×8 세부 보기 팝업"""
+        row = self.s2_table.rowAt(pos.y())
+        if row < 0:
+            return
+        item = self.s2_table.item(row, 0)
+        if not item:
+            return
+        mac  = item.text()
+        snap = self._s2_snaps.get(mac)
+
+        menu   = QMenu(self)
+        action = menu.addAction(f"🔍  8×8 세부 거리 보기  [{mac}]")
+        if menu.exec(self.s2_table.viewport().mapToGlobal(pos)) == action:
+            raw64 = (snap.s2_raw64 if snap and snap.s2_raw64
+                     else [4000] * 64)
+            dlg = self._s2_dialogs.get(mac)
+            if dlg and dlg.isVisible():
+                dlg.raise_()
+                dlg.activateWindow()
+            else:
+                dlg = S2GridDialog(mac, raw64, parent=self)
+                dlg.finished.connect(
+                    lambda _, m=mac: self._s2_dialogs.pop(m, None))
+                self._s2_dialogs[mac] = dlg
+                dlg.show()
 
     @Slot()
     def _on_apply_mapping(self):
