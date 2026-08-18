@@ -7,6 +7,8 @@ Setup UI 메인 윈도우 — 3개 탭 구성.
 탭 3: 설정 보기 (전송된 config JSON 표시)
 """
 
+import math
+
 from PySide6.QtWidgets import (
     QMainWindow, QWidget,
     QVBoxLayout, QHBoxLayout, QFormLayout,
@@ -18,8 +20,8 @@ from PySide6.QtWidgets import (
     QScrollArea, QFrame,
     QDialog, QMenu,
 )
-from PySide6.QtGui import QFont, QPainter, QColor, QBrush, QPen
-from PySide6.QtCore import Qt, Slot, QRectF
+from PySide6.QtGui import QFont, QPainter, QColor, QBrush, QPen, QPolygonF
+from PySide6.QtCore import Qt, Slot, QRectF, QPointF
 
 from ..viewmodel.setup_viewmodel import SetupViewModel, DeviceSnapshot
 from ..model.config_model import RaderConfig
@@ -175,6 +177,242 @@ class S2GridDialog(QDialog):
 
 
 
+# ── S2 공간구성 3D 시각화 ─────────────────────────────────────────────────────
+_SPATIAL_CELL_CM  = 20    # 바닥 커버리지 그리드 셀 크기 (cm)
+_SENSOR_COLORS    = ["#4fc3f7","#81c784","#ffb74d","#f06292",
+                     "#ce93d8","#80cbc4","#ffcc02","#ff8a65"]
+
+
+class _Spatial3DWidget(QWidget):
+    """S2 센서 배치 3D 직교투영 뷰 — VL53L5CX FOV 커버리지 시각화.
+    좌드래그: 회전 | 우드래그/중간: 패닝 | 휠: 줌 | 더블클릭: 초기화
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMinimumSize(520, 380)
+        self._sensors: list[tuple[float, str]] = []  # (z_cm, label)
+        self._height_cm = 400.0
+        self._length_cm = 1000.0
+        self._fov_deg   = 45.0
+        self._az  = -25.0
+        self._el  =  38.0
+        # pan & zoom
+        self._zoom   = 1.5
+        self._pan_x  = 0.0
+        self._pan_y  = 0.0
+        # drag state
+        self._drag_pos    = None
+        self._drag_button = None
+        self._az0    = self._az
+        self._el0    = self._el
+        self._pan_x0 = 0.0
+        self._pan_y0 = 0.0
+
+    def set_scene(self, sensors: list, height_cm: float,
+                  length_cm: float, fov_deg: float):
+        self._sensors   = sensors
+        self._height_cm = max(10.0, height_cm)
+        self._length_cm = max(10.0, length_cm)
+        self._fov_deg   = max(5.0, min(85.0, fov_deg))
+        self.update()
+
+    # ── 마우스 회전 / 패닝 / 줌 ───────────────────────────────────────────
+    def mousePressEvent(self, e):
+        self._drag_pos    = e.position()
+        self._drag_button = e.button()
+        if e.button() == Qt.LeftButton:
+            self._az0, self._el0 = self._az, self._el
+        else:
+            self._pan_x0, self._pan_y0 = self._pan_x, self._pan_y
+
+    def mouseMoveEvent(self, e):
+        if not self._drag_pos:
+            return
+        dx = e.position().x() - self._drag_pos.x()
+        dy = e.position().y() - self._drag_pos.y()
+        if self._drag_button == Qt.LeftButton and (e.buttons() & Qt.LeftButton):
+            self._az = self._az0 - dx * 0.4
+            self._el = max(5.0, min(80.0, self._el0 - dy * 0.4))
+        elif self._drag_button in (Qt.RightButton, Qt.MiddleButton):
+            self._pan_x = self._pan_x0 + dx
+            self._pan_y = self._pan_y0 + dy
+        self.update()
+
+    def mouseReleaseEvent(self, e):
+        if e.button() == self._drag_button:
+            self._drag_pos    = None
+            self._drag_button = None
+
+    def mouseDoubleClickEvent(self, e):
+        """더블클릭: 시점·패닝·줌 초기화"""
+        self._az, self._el = -25.0, 38.0
+        self._zoom = 1.5
+        self._pan_x = self._pan_y = 0.0
+        self.update()
+
+    def wheelEvent(self, e):
+        factor = 1.12 if e.angleDelta().y() > 0 else 0.893
+        self._zoom = max(0.15, min(12.0, self._zoom * factor))
+        self.update()
+
+    # ── 투영 ────────────────────────────────────────────────────────────────
+    def _proj(self, x: float, y: float, z: float) -> QPointF:
+        """3D → 2D (스탠드 중심 원점, pan/zoom 적용)"""
+        az = math.radians(self._az)
+        el = math.radians(self._el)
+        z_c = z - self._length_cm / 2   # 스탠드 중심을 원점으로
+        xr =  x * math.cos(az) + z_c * math.sin(az)
+        zr = -x * math.sin(az) + z_c * math.cos(az)
+        yr =  y * math.cos(el) - zr * math.sin(el)
+        w, h = self.width(), self.height()
+        scale = min(w, h) / (self._length_cm * 2.1) * self._zoom
+        return QPointF(w * 0.5 + xr * scale + self._pan_x,
+                       h * 0.55 - yr * scale + self._pan_y)
+
+    # ── 커버리지 계산 ─────────────────────────────────────────────────────────
+    def _calc_coverage(self) -> dict:
+        """(ix, iz) → count  (바닥 그리드 셀별 커버 센서 수)"""
+        if not self._sensors:
+            return {}
+        H  = self._height_cm
+        hf = math.tan(math.radians(self._fov_deg / 2))
+        xs = H * hf
+        cs = _SPATIAL_CELL_CM
+        cov: dict = {}
+        for z_s, _ in self._sensors:
+            ix0 = int(-xs / cs) - 1
+            ix1 = int( xs / cs) + 2
+            iz0 = int((z_s - xs) / cs) - 1
+            iz1 = int((z_s + xs) / cs) + 2
+            for ix in range(ix0, ix1):
+                for iz in range(iz0, iz1):
+                    cx = (ix + 0.5) * cs
+                    cz = (iz + 0.5) * cs
+                    ax = math.degrees(math.atan2(abs(cx), H))
+                    az = math.degrees(math.atan2(abs(cz - z_s), H))
+                    if ax < self._fov_deg / 2 and az < self._fov_deg / 2:
+                        cov[(ix, iz)] = cov.get((ix, iz), 0) + 1
+        return cov
+
+    # ── 그리기 ────────────────────────────────────────────────────────────────
+    def paintEvent(self, _event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        W, H_w = self.width(), self.height()
+        painter.fillRect(self.rect(), QColor("#16213e"))
+
+        H  = self._height_cm
+        L  = self._length_cm
+        hf = math.tan(math.radians(self._fov_deg / 2))
+        xs = H * hf
+        cs = _SPATIAL_CELL_CM
+        pp = self._proj
+
+        def poly(*pts):
+            return QPolygonF(list(pts))
+
+        # ── 바닥 베이스 ────────────────────────────────────────────────────
+        pad = max(xs * 0.3, 50)
+        fp = poly(pp(-xs-pad, 0, -L*0.06), pp(xs+pad, 0, -L*0.06),
+                  pp(xs+pad, 0,  L*1.06),  pp(-xs-pad, 0,  L*1.06))
+        painter.setBrush(QBrush(QColor("#1b2838")))
+        painter.setPen(Qt.NoPen)
+        painter.drawPolygon(fp)
+
+        # ── 바닥 격자선 ────────────────────────────────────────────────────
+        step = max(50, (int(max(L, xs * 2) / 8 / 50) + 1) * 50)
+        painter.setPen(QPen(QColor(80, 100, 120, 50), 0.5))
+        z = 0
+        while z <= int(L) + step:
+            painter.drawLine(pp(-xs*1.2, 0, z), pp(xs*1.2, 0, z))
+            z += step
+        x = int(-xs * 1.2 / step) * step
+        while x <= int(xs * 1.2) + step:
+            painter.drawLine(pp(x, 0, 0), pp(x, 0, L))
+            x += step
+
+        # ── 수직 지지대 & 스탠드 바 ───────────────────────────────────────
+        painter.setPen(QPen(QColor("#546e7a"), 1, Qt.DashLine))
+        painter.drawLine(pp(0, 0, 0), pp(0, H, 0))
+        painter.drawLine(pp(0, 0, L), pp(0, H, L))
+        painter.setPen(QPen(QColor("#90a4ae"), 2))
+        painter.drawLine(pp(0, H, 0), pp(0, H, L))
+
+        # ── 센서별 FOV 피라미드 ────────────────────────────────────────────
+        for si, (z_s, label) in enumerate(self._sensors):
+            color = QColor(_SENSOR_COLORS[si % len(_SENSOR_COLORS)])
+            s_pt = pp(0, H, z_s)
+            fl   = [pp(-xs, 1, z_s-xs), pp(xs, 1, z_s-xs),
+                    pp( xs, 1, z_s+xs), pp(-xs, 1, z_s+xs)]
+
+            # 피라미드 면 — 알파 채움 (뒷면 먼저 → 앞면 순서로 대략 정렬)
+            # az < 0 이면 카메라가 +x 방향에서 보므로 face 순서 조정
+            face_order = [2, 3, 0, 1] if self._az < 0 else [0, 3, 2, 1]
+            for fi in face_order:
+                # 면마다 깊이감: 뒷면 더 어둡게, 앞면 더 밝게
+                alpha = 22 + fi * 4
+                fc = QColor(color); fc.setAlpha(alpha)
+                painter.setBrush(QBrush(fc))
+                painter.setPen(Qt.NoPen)
+                painter.drawPolygon(poly(s_pt, fl[fi], fl[(fi+1) % 4]))
+
+            # 와이어프레임 (센서→바닥 모서리)
+            wc = QColor(color); wc.setAlpha(65)
+            painter.setPen(QPen(wc, 0.8, Qt.DotLine))
+            for fp_pt in fl:
+                painter.drawLine(s_pt, fp_pt)
+
+            # 풋프린트 테두리
+            oc = QColor(color); oc.setAlpha(200)
+            painter.setPen(QPen(oc, 1.5))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawPolygon(poly(*fl))
+
+            # 센서 구슬
+            painter.setBrush(QBrush(color))
+            painter.setPen(Qt.NoPen)
+            painter.drawEllipse(s_pt, 7, 7)
+
+            # 라벨
+            painter.setPen(QPen(color))
+            f = painter.font(); f.setBold(True); f.setPixelSize(11)
+            painter.setFont(f)
+            painter.drawText(
+                QRectF(s_pt.x()+9, s_pt.y()-7, 70, 14),
+                Qt.AlignLeft | Qt.AlignVCenter, label)
+
+        # ── 높이 치수선 ───────────────────────────────────────────────────
+        if self._sensors:
+            z_s0 = self._sensors[0][0]
+            xd   = xs * 1.55
+            painter.setPen(QPen(QColor("#78909c"), 1))
+            painter.drawLine(pp(xd, 0, z_s0), pp(xd, H, z_s0))
+            painter.drawLine(pp(xd-4, 0, z_s0), pp(xd+4, 0, z_s0))
+            painter.drawLine(pp(xd-4, H, z_s0), pp(xd+4, H, z_s0))
+            mid = pp(xd+6, H/2, z_s0)
+            painter.setPen(QPen(QColor("#aaa")))
+            f = painter.font(); f.setBold(False); f.setPixelSize(10)
+            painter.setFont(f)
+            painter.drawText(QRectF(mid.x(), mid.y()-8, 90, 16),
+                           Qt.AlignLeft, f"H={H/100:.2f}m")
+
+        # ── 사각지대 통계 ──────────────────────────────────────────────────
+        painter.setPen(QPen(QColor("#aaa")))
+        f = painter.font(); f.setBold(False); f.setPixelSize(10)
+        painter.setFont(f)
+        if not self._sensors:
+            painter.setPen(QPen(QColor("#f44336")))
+            f.setPixelSize(14); f.setBold(True); painter.setFont(f)
+            painter.drawText(W//2-80, H_w//2, "등록된 S2 센서 없음")
+
+        # ── 조작 힌트 ─────────────────────────────────────────────────────
+        painter.setPen(QPen(QColor("#444")))
+        f = painter.font(); f.setPixelSize(9); painter.setFont(f)
+        painter.drawText(W-210, H_w-6,
+            "좌드래그:회전 | 우드래그:이동 | 휠:줌 | 더블클릭:초기화")
+
+
 # S1 위치 선택지
 S1_POSITION_OPTIONS = ["(unset)", "L", "R"]
 # S2 위치 선택지 — config에 저장되는 값이므로 영어로 고정
@@ -209,6 +447,7 @@ class SetupWindow(QMainWindow):
         self._tabs.addTab(self._tab_connection(),   "① 브로커 연결")
         self._tabs.addTab(self._tab_field_config(), "② 장치현장구성")
         self._tabs.addTab(self._tab_config_view(),  "③ 설정 보기")
+        self._tabs.addTab(self._tab_spatial(),      "④ 공간구성 3D")
 
     # ── 탭 1: 브로커 연결 ─────────────────────────────────────────────────────
     def _tab_connection(self) -> QWidget:
@@ -436,6 +675,107 @@ class SetupWindow(QMainWindow):
 
         return w
 
+    # ── 탭 4: 공간구성 3D ─────────────────────────────────────────────────────
+    def _tab_spatial(self) -> QWidget:
+        w   = QWidget()
+        lay = QHBoxLayout(w)
+        lay.setContentsMargins(6, 6, 6, 6)
+        lay.setSpacing(8)
+
+        # 3D 뷰
+        self._spatial_3d = _Spatial3DWidget()
+        lay.addWidget(self._spatial_3d, stretch=3)
+
+        # 컨트롤 패널
+        ctrl = QWidget()
+        ctrl.setFixedWidth(190)
+        ctrl_lay = QVBoxLayout(ctrl)
+        ctrl_lay.setSpacing(8)
+        ctrl_lay.setContentsMargins(0, 0, 0, 0)
+
+        h_box = QGroupBox("설치 높이")
+        h_form = QFormLayout(h_box)
+        self._sp_height = QDoubleSpinBox()
+        self._sp_height.setRange(0.5, 10.0)
+        self._sp_height.setSingleStep(0.1)
+        self._sp_height.setDecimals(2)
+        self._sp_height.setSuffix(" m")
+        self._sp_height.setValue(4.0)
+        h_form.addRow("높이 :", self._sp_height)
+        ctrl_lay.addWidget(h_box)
+
+        l_box = QGroupBox("스탠드 전체 길이")
+        l_form = QFormLayout(l_box)
+        self._sp_length = QDoubleSpinBox()
+        self._sp_length.setRange(0.5, 50.0)
+        self._sp_length.setSingleStep(0.5)
+        self._sp_length.setDecimals(1)
+        self._sp_length.setSuffix(" m")
+        self._sp_length.setValue(10.0)
+        l_form.addRow("길이 :", self._sp_length)
+        ctrl_lay.addWidget(l_box)
+
+        d_box = QGroupBox("슬롯 수 (등분)")
+        d_form = QFormLayout(d_box)
+        self._sp_divisions = QSpinBox()
+        self._sp_divisions.setRange(2, 20)
+        self._sp_divisions.setValue(10)
+        self._sp_divisions.setToolTip("스탠드를 몇 등분하여 pos1~posN 위치를 배분할지 결정합니다")
+        d_form.addRow("슬롯 수 :", self._sp_divisions)
+        ctrl_lay.addWidget(d_box)
+
+        fov_lbl = QLabel("VL53L5CX FOV: 45° × 45°\n(하드웨어 고정값)")
+        fov_lbl.setStyleSheet("color:#78909c; font-size:10px; padding:4px 0px;")
+        ctrl_lay.addWidget(fov_lbl)
+
+        refresh_btn = QPushButton("▶  적용 & 새로고침")
+        refresh_btn.setObjectName("pushBtn")
+        refresh_btn.clicked.connect(self._update_spatial)
+        ctrl_lay.addWidget(refresh_btn)
+
+        ctrl_lay.addStretch()
+
+        hint = QLabel("드래그: 시점 회전\n초록: 단일 커버\n파랑: 이중 커버\n주황: 3+ 커버")
+        hint.setStyleSheet("color:#666; font-size:10px;")
+        ctrl_lay.addWidget(hint)
+
+        lay.addWidget(ctrl)
+        return w
+
+    def _update_spatial(self):
+        """config에서 등록된 S2 센서 위치를 읽어 3D 뷰 갱신."""
+        cfg    = self._vm.get_config()
+        n_div  = self._sp_divisions.value()
+        l_cm   = self._sp_length.value() * 100
+        h_cm   = self._sp_height.value() * 100
+        fov    = 45.0           # VL53L5CX 축별 FOV 고정값
+
+        parsed = []
+        for dev in cfg.devices:
+            if dev.type != "S2":
+                continue
+            label = (dev.s2 or [""])[0]
+            if label in ("", "unset"):
+                continue
+            try:
+                pos = int(label.replace("pos", ""))
+                parsed.append((pos, label))
+            except ValueError:
+                pass
+
+        if parsed:
+            max_pos = max(p for p, _ in parsed)
+            if max_pos != n_div:
+                self._sp_divisions.setValue(max_pos)
+                n_div = max_pos
+
+        sensors = []
+        for pos, label in sorted(parsed):
+            z_cm = (pos - 1) / max(1, n_div - 1) * l_cm
+            sensors.append((z_cm, label))
+
+        self._spatial_3d.set_scene(sensors, h_cm, l_cm, fov)
+
     # ─────────────────────────────────────────────────────────────────────────
     # ViewModel 바인딩
     # ─────────────────────────────────────────────────────────────────────────
@@ -614,6 +954,9 @@ class SetupWindow(QMainWindow):
         self.apply_status_lbl.setText("전송 중…")
         self.apply_status_lbl.setStyleSheet("color:#FFC107;")
         self._vm.mqtt_publish_config()
+
+        # 4. 공간구성 3D 뷰 갱신
+        self._update_spatial()
 
     @Slot(float, int, int)
     def _on_tilt_preview(self, tilt_deg: float, left_cm: int, right_cm: int):
