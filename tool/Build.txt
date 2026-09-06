@@ -1,0 +1,1 @@
+pyinstaller --onefile --windowed --name RaderFlash flash_esp32.py

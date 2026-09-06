@@ -114,6 +114,7 @@ pyz_emul    = PYZ(a_emul.pure)
 
 # ── EXE ───────────────────────────────────────────────────────────────────────
 _kw = dict(
+    exclude_binaries=True,
     debug=False, bootloader_ignore_signals=False,
     strip=False, upx=True, upx_exclude=[], console=False,
     disable_windowed_traceback=False, argv_emulation=False,
