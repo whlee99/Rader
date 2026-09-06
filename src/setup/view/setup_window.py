@@ -20,11 +20,13 @@ from PySide6.QtWidgets import (
     QScrollArea, QFrame,
     QDialog, QMenu,
 )
-from PySide6.QtGui import QFont, QPainter, QColor, QBrush, QPen, QPolygonF
+from PySide6.QtGui import QFont, QPainter, QColor, QBrush, QPen, QPolygonF, QPainterPath
 from PySide6.QtCore import Qt, Slot, QRectF, QPointF
 
 from ..viewmodel.setup_viewmodel import SetupViewModel, DeviceSnapshot
 from ..model.config_model import RaderConfig
+
+from src.monitor.view.widgets import Constants as MonitorColorConstants
 
 STYLESHEET = """
 QWidget          { background-color:#2E2E2E; color:#FFFFFF; font-family:Arial; font-size:12px; }
@@ -57,13 +59,14 @@ _CONN_STYLE = {True: "color:#4caf50; font-weight:bold;",
 class _S2GridWidget(QWidget):
     """8×8 (64존) 거리 히트맵 — 색상 + 수치 표시"""
 
+    # monitor(src/monitor/view/widgets.py::Constants)와 동일한 lookup table 재사용
     _THRESHOLDS = [
-        (500,  QColor("#f44336")),   # 위험 (빨강)
-        (1000, QColor("#ff9800")),   # 경고 (주황)
-        (2000, QColor("#ffc107")),   # 주의 (노랑)
-        (3500, QColor("#4caf50")),   # 정상 (초록)
+        (MonitorColorConstants.OBSTACLE_DIST_CRITICAL, MonitorColorConstants.COLOR_CRITICAL),
+        (MonitorColorConstants.OBSTACLE_DIST_WARNING,  MonitorColorConstants.COLOR_WARNING),
+        (MonitorColorConstants.OBSTACLE_DIST_CAUTION,  MonitorColorConstants.COLOR_CAUTION),
+        (MonitorColorConstants.OBSTACLE_DIST_NORMAL,   MonitorColorConstants.COLOR_NORMAL),
     ]
-    _COLOR_SAFE = QColor("#37474f")  # 안전 (짙은 회색)
+    _COLOR_SAFE = MonitorColorConstants.COLOR_SAFE
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -131,6 +134,95 @@ class _S2GridWidget(QWidget):
                              Qt.AlignCenter, str(i))
 
 
+class _S2Iso3DWidget(QWidget):
+    """8×8(64존) 아이소메트릭 3D 막대 차트 — 셀별 거리값을 높이로만 표현 (시인성 우선).
+
+    무효 zone(status 마스킹 sentinel, d>=9999)은 높이 0(평평)의 안전색 타일로 그려진다.
+    """
+
+    _INVALID = 9999
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._data: list[int] = [4000] * 64
+        self.setMinimumSize(380, 340)
+
+    def update_data(self, raw64: list[int]):
+        self._data = (raw64 + [4000] * 64)[:64]
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        w, h = self.width(), self.height()
+        painter.fillRect(self.rect(), QColor("#2E2E2E"))
+
+        margin   = 12
+        avail_h  = h - margin * 2
+        cw       = max(4, (w - margin * 2) // 16)   # 타일 반폭
+        ch       = max(2, cw // 2)                  # 타일 반높이 (2:1 isometric)
+        max_bar  = max(8, avail_h - 14 * ch - 8)     # 최대 바 픽셀 높이
+        cx       = w // 2
+        cy       = margin + max_bar + 6              # 그리드 북쪽 꼭짓점 기준 y
+        max_dist = float(self._INVALID - 1)          # 무효(9999)는 항상 높이 0
+        edge_pen = QPen(QColor("#0d0d0d"), 0.3)
+
+        # 뒤에서 앞으로: (col+row) 오름차순 (occlusion 보정)
+        for diag in range(15):
+            for row in range(max(0, diag - 7), min(8, diag + 1)):
+                col = diag - row
+                if not (0 <= col < 8):
+                    continue
+
+                d    = self._data[row * 8 + col]
+                h_px = int(max_bar * max(0.0, 1.0 - min(d, max_dist) / max_dist))
+                base = _S2GridWidget._cell_color(d)
+                sx   = cx + (col - row) * cw
+                sy   = cy + (col + row) * ch
+
+                top = [
+                    QPointF(sx,      sy - ch - h_px),  # north
+                    QPointF(sx + cw, sy      - h_px),  # east
+                    QPointF(sx,      sy + ch - h_px),  # south
+                    QPointF(sx - cw, sy      - h_px),  # west
+                ]
+
+                if h_px > 1:
+                    r_pts = [top[1], top[2],
+                             QPointF(sx,      sy + ch),
+                             QPointF(sx + cw, sy)]
+                    path = QPainterPath()
+                    path.moveTo(r_pts[0])
+                    for p in r_pts[1:]:
+                        path.lineTo(p)
+                    path.closeSubpath()
+                    painter.setBrush(QBrush(base.darker(150)))
+                    painter.setPen(edge_pen)
+                    painter.drawPath(path)
+
+                    l_pts = [top[3], top[2],
+                             QPointF(sx,      sy + ch),
+                             QPointF(sx - cw, sy)]
+                    path = QPainterPath()
+                    path.moveTo(l_pts[0])
+                    for p in l_pts[1:]:
+                        path.lineTo(p)
+                    path.closeSubpath()
+                    painter.setBrush(QBrush(base.darker(190)))
+                    painter.setPen(edge_pen)
+                    painter.drawPath(path)
+
+                path = QPainterPath()
+                path.moveTo(top[0])
+                for p in top[1:]:
+                    path.lineTo(p)
+                path.closeSubpath()
+                painter.setBrush(QBrush(base))
+                painter.setPen(edge_pen)
+                painter.drawPath(path)
+
+
+
 class S2GridDialog(QDialog):
     """S2 장치 8×8 거리 세부 정보 팝업 (비모달, 실시간 갱신)"""
 
@@ -139,29 +231,44 @@ class S2GridDialog(QDialog):
         self._mac = mac
         self.setWindowTitle(f"S2 세부 거리  —  {mac}")
         self.setWindowFlag(Qt.WindowStaysOnTopHint, True)
-        self.resize(440, 420)
+        self.resize(840, 440)
         self.setStyleSheet(STYLESHEET)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(8, 8, 8, 8)
         lay.setSpacing(6)
 
-        # 범례
+        # 범례 (monitor 와 동일한 lookup table 기준)
         legend_row = QHBoxLayout()
-        for label, color in [("위험 <500", "#f44336"), ("경고 <1000", "#ff9800"),
-                              ("주의 <2000", "#ffc107"), ("정상 <3500", "#4caf50"),
-                              ("안전", "#37474f")]:
+        _c = MonitorColorConstants
+        for label, color in [
+            (f"위험 <{_c.OBSTACLE_DIST_CRITICAL}", _c.COLOR_CRITICAL.name()),
+            (f"경고 <{_c.OBSTACLE_DIST_WARNING}",  _c.COLOR_WARNING.name()),
+            (f"주의 <{_c.OBSTACLE_DIST_CAUTION}",  _c.COLOR_CAUTION.name()),
+            (f"정상 <{_c.OBSTACLE_DIST_NORMAL}",   _c.COLOR_NORMAL.name()),
+            ("안전",                                _c.COLOR_SAFE.name()),
+        ]:
             lbl = QLabel(f"  {label}  ")
             lbl.setStyleSheet(
-                f"background:{color}; color:{'#000' if color=='#ffc107' else '#fff'};"
+                f"background:{color}; color:{'#000' if color == _c.COLOR_CAUTION.name() else '#fff'};"
                 "border-radius:3px; padding:2px 4px; font-size:10px;")
             legend_row.addWidget(lbl)
         legend_row.addStretch()
         lay.addLayout(legend_row)
 
+        # 좌: 2D 히트맵 그리드 / 우: 3D 아이소메트릭 뷰
+        content_row = QHBoxLayout()
+        content_row.setSpacing(10)
+
         self._grid = _S2GridWidget()
         self._grid.update_data(raw64)
-        lay.addWidget(self._grid, stretch=1)
+        content_row.addWidget(self._grid, stretch=1)
+
+        self._iso3d = _S2Iso3DWidget()
+        self._iso3d.update_data(raw64)
+        content_row.addWidget(self._iso3d, stretch=1)
+
+        lay.addLayout(content_row, stretch=1)
 
         self._info_lbl = QLabel("단위: mm")
         self._info_lbl.setStyleSheet("color:#aaa; font-size:10px;")
@@ -174,6 +281,7 @@ class S2GridDialog(QDialog):
             self._info_lbl.setText(
                 f"단위: mm   |   최솟값: {min_d} mm   |   MAC: {self._mac}")
         self._grid.update_data(raw64)
+        self._iso3d.update_data(raw64)
 
 
 

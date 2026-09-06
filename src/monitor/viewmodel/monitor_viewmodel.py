@@ -11,6 +11,8 @@ Model(MqttModel) 로부터 raw payload 를 받아 View 에 표시할 데이터�
 import math
 import json
 import socket
+import statistics
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -18,6 +20,38 @@ from typing import Optional
 from PySide6.QtCore import QObject, Signal, Slot, QTimer
 
 from ..model.mqtt_model import MqttModel
+
+# VL53L5CX target_status 신뢰도 필터링 (ESP32는 raw 값을 그대로 전달 → 수신측에서 마스킹)
+#   5 : 100% 신뢰 가능한 타깃
+#   9 : 50% 이상 신뢰 가능한 타깃 (주변광 노이즈 있으나 유효)
+#   그 외(0,1,2,4 등) : 신호 미약/랩어라운드/위상 오류 → 무효 처리
+S2_STATUS_VALID            = (5, 9)
+S2_STATUS_INVALID_SENTINEL = 9999   # 무효 zone 표시값 (히트맵/막대 뷰에서 안전색으로 렌더링됨)
+
+
+def apply_s2_status_mask(zone_d: list, zone_st: list) -> list:
+    """target_status 기반 VL53L5CX 8x8 거리값 필터링.
+
+    status==5/9 만 유효로 보고 원값을 그대로 사용하며, 그 외는 무효 처리(sentinel)한다.
+    st 배열이 없으면(구버전 펌웨어 등) 마스킹 없이 원본을 그대로 반환한다.
+    """
+    if not zone_st:
+        return list(zone_d)
+    return [
+        d if (zone_st[i] if i < len(zone_st) else 0) in S2_STATUS_VALID
+        else S2_STATUS_INVALID_SENTINEL
+        for i, d in enumerate(zone_d)
+    ]
+
+
+# S2 표시값의 노이즈 억제 — zone 별 시계열 N=5 미디언 필터
+S2_MEDIAN_N = 5
+
+
+def apply_s2_median_filter(history: deque) -> list:
+    """zone(64개) 별로 최근 history(최대 N개 프레임)의 중앙값을 계산한다."""
+    frames = list(history)
+    return [int(statistics.median(frame[i] for frame in frames)) for i in range(64)]
 
 
 # ── 상태 정보 데이터클래스 ────────────────────────────────────────────────────
@@ -82,6 +116,8 @@ class MonitorViewModel(QObject):
         self._s1_buf: dict[str, int] = {}   # {"L": cm, "R": cm}
         # S2 슬롯별 현재 최솟값 (mm)
         self._s2_min_dist: dict[int, int] = {}
+        # S2 zone 별 시계열 버퍼 (N=5 미디언 필터용) — mac → deque[frame(64) ...]
+        self._s2_history: dict[str, deque] = {}
 
         # ── 최신값 버퍼 (lossy coalescing) ────────────────────────────────────
         # MQTT 네트워크 스레드가 빠르게 쌓아도 GUI는 항상 최신값만 처리
@@ -170,6 +206,7 @@ class MonitorViewModel(QObject):
 
         self._s1_buf.clear()       # 이전 버퍼 초기화
         self._s2_min_dist.clear()   # S2 누적 상태 초기화
+        self._s2_history.clear()   # S2 미디언 필터 히스토리 초기화
         # 인디케이터 매핑 상태 통보
         has_l = any(v == "L" for v in self._mac_to_role.values())
         has_r = any(v == "R" for v in self._mac_to_role.values())
@@ -269,9 +306,15 @@ class MonitorViewModel(QObject):
             if slot is not None:   # config 매핑된 슬롯만 처리
                 d64  = s2[0].get("d",  [4000] * 64)
                 st64 = s2[0].get("st", [0]    * 64)
-                # target_status == 5, 범위초과(65535) 제외, 크로스토크 하한(30mm) 제외
-                valid = [d for d, s in zip(d64, st64) if s == 5 and 30 <= d < 65535]
-                self.s2_updated.emit(slot, d64)
+                # status 마스킹(5/9만 유효) → zone별 N=5 미디언 필터 (setup S2 세부 거리와 동일 로직)
+                masked = apply_s2_status_mask(d64, st64)
+                frame  = (masked + [4000] * 64)[:64]
+                hist = self._s2_history.setdefault(mac, deque(maxlen=S2_MEDIAN_N))
+                hist.append(frame)
+                filtered = apply_s2_median_filter(hist)
+
+                valid = [d for d in filtered if d < S2_STATUS_INVALID_SENTINEL]
+                self.s2_updated.emit(slot, filtered)
                 self.s2_blinked.emit(slot)
                 self._s2_min_dist[slot] = min(valid) if valid else 9999
 

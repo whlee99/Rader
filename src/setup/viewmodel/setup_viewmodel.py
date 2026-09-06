@@ -10,6 +10,7 @@ Setup UI 의 ViewModel.
 
 import math
 import threading
+from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -20,12 +21,19 @@ from PySide6.QtCore import QObject, Signal, Slot
 from ..model.config_model import RaderConfig, DeviceConfig
 
 from src.monitor.model.mqtt_model import MqttModel
+from src.monitor.viewmodel.monitor_viewmodel import (
+    S2_MEDIAN_N,
+    apply_s2_status_mask,
+    apply_s2_median_filter,
+)
 
 # config 로컬 저장 경로
 # config 파일: 프로젝트 루트(src 의 부모) / config / rader_config.json
 # __file__ = .../src/setup/viewmodel/setup_viewmodel.py → .parent×4 = 프로젝트 루트
 _PROJECT_ROOT   = Path(__file__).resolve().parent.parent.parent.parent
 LOCAL_CONFIG_PATH = _PROJECT_ROOT / "config" / "rader_config.json"
+
+# VL53L5CX status 마스킹 / N=5 미디언 필터는 monitor_viewmodel 과 동일한 구현을 공유 (단일 소스)
 
 
 # ── 수신 장치 스냅샷 ──────────────────────────────────────────────────────────
@@ -68,6 +76,8 @@ class SetupViewModel(QObject):
 
         # 최신 S1 raw 값 (calibration 용)
         self._latest_s1: dict[str, list[int]] = {}   # mac → [cm, ...]
+        # S2 zone 별 시계열 버퍼 (N=5 미디언 필터용) — mac → deque[frame(64) ...]
+        self._s2_history: dict[str, deque] = {}
 
         self._model.payload_received.connect(self._on_payload)
         self._model.log_signal.connect(self.log_signal)
@@ -112,9 +122,18 @@ class SetupViewModel(QObject):
             # Calibration 미리보기 갱신 (매핑된 S1이 있을 때)
             self._emit_tilt_preview()
         else:
-            s2_raw = data.get("s2", [{}])
-            zone_d = s2_raw[0].get("d", []) if s2_raw else []
-            raw64  = (zone_d + [4000] * 64)[:64]
+            s2_raw  = data.get("s2", [{}])
+            zone_d  = s2_raw[0].get("d",  []) if s2_raw else []
+            zone_st = s2_raw[0].get("st", []) if s2_raw else []
+            # status 마스킹 + N=5 미디언 필터 (monitor_viewmodel 과 동일 로직 공유)
+            masked = apply_s2_status_mask(zone_d, zone_st)
+            frame  = (masked + [4000] * 64)[:64]
+
+            # zone 별 N=5 시계열 미디언 필터 (노이즈 억제)
+            hist = self._s2_history.setdefault(mac, deque(maxlen=S2_MEDIAN_N))
+            hist.append(frame)
+            raw64 = apply_s2_median_filter(hist)
+
             min_d  = min(zone_d) if zone_d else 0
             snap   = DeviceSnapshot(
                 mac=mac, dtype="S2", last_seen=ts,
@@ -129,6 +148,7 @@ class SetupViewModel(QObject):
         """감지된 장치 목록을 초기화한다."""
         self._devices.clear()
         self._latest_s1.clear()
+        self._s2_history.clear()
         self.device_list_updated.emit([])
 
     # ── Calibration 미리보기 ──────────────────────────────────────────────────
